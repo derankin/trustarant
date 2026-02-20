@@ -31,9 +31,14 @@ async fn main() -> anyhow::Result<()> {
         default_connectors(),
     ));
 
-    if let Err(err) = ingestion_service.refresh().await {
-        error!(error = %err, "Initial ingestion failed; API will still start");
-    }
+    let initial_ingestion_service = ingestion_service.clone();
+    tokio::spawn(async move {
+        if let Err(err) = initial_ingestion_service.refresh().await {
+            error!(error = %err, "Initial ingestion failed; API will still start");
+        } else {
+            info!("Initial ingestion completed");
+        }
+    });
 
     let app_state = AppState {
         directory_service: Arc::new(DirectoryService::new(repository)),

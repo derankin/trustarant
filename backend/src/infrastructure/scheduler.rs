@@ -7,6 +7,9 @@ use crate::application::services::IngestionService;
 
 pub async fn run(ingestion_service: Arc<IngestionService>, interval_hours: u64) {
     let mut interval = time::interval(Duration::from_secs(interval_hours.max(1) * 60 * 60));
+    // Consume the immediate first tick so the periodic scheduler waits for the
+    // configured interval after startup.
+    interval.tick().await;
 
     loop {
         interval.tick().await;
