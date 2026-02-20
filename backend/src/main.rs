@@ -37,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app_state = AppState {
         directory_service: Arc::new(DirectoryService::new(repository)),
+        ingestion_service: ingestion_service.clone(),
     };
 
     tokio::spawn(scheduler::run(

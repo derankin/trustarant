@@ -14,7 +14,7 @@ use crate::{
 
 const DEFAULT_BASE_URL: &str = "https://internal-sandiegocounty.data.socrata.com";
 const DEFAULT_DATASET_ID: &str = "c5ez-ufrd";
-const DEFAULT_LIMIT: usize = 5000;
+const DEFAULT_PAGE_SIZE: usize = 5000;
 const DEFAULT_TIMEOUT_SECS: u64 = 20;
 
 #[derive(Clone)]
@@ -22,7 +22,8 @@ pub struct SanDiegoConnector {
     client: reqwest::Client,
     base_url: String,
     dataset_id: String,
-    limit: usize,
+    page_size: usize,
+    max_records: Option<usize>,
     active_only: bool,
 }
 
@@ -40,10 +41,16 @@ impl SanDiegoConnector {
             .to_owned();
         let dataset_id = env::var("TRUSTARANT_SD_SOCRATA_DATASET_ID")
             .unwrap_or_else(|_| DEFAULT_DATASET_ID.to_owned());
-        let limit = env::var("TRUSTARANT_SD_SOCRATA_LIMIT")
+        let page_size = env::var("TRUSTARANT_SD_SOCRATA_PAGE_SIZE")
+            .ok()
+            .or_else(|| env::var("TRUSTARANT_SD_SOCRATA_LIMIT").ok())
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_PAGE_SIZE)
+            .max(1);
+        let max_records = env::var("TRUSTARANT_SD_SOCRATA_MAX_RECORDS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_LIMIT);
+            .filter(|value| *value > 0);
         let active_only = env::var("TRUSTARANT_SD_SOCRATA_ACTIVE_ONLY")
             .ok()
             .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
@@ -73,7 +80,8 @@ impl SanDiegoConnector {
             client,
             base_url,
             dataset_id,
-            limit,
+            page_size,
+            max_records,
             active_only,
         }
     }
@@ -111,28 +119,50 @@ impl HealthDataConnector for SanDiegoConnector {
             "record_id IS NOT NULL AND record_name IS NOT NULL"
         };
 
-        let limit = self.limit.to_string();
+        let mut offset = 0usize;
+        let mut rows = Vec::<SanDiegoPermitRow>::new();
 
-        let rows = self
-            .client
-            .get(endpoint)
-            .query(&[
+        loop {
+            let query = vec![
                 (
-                    "$select",
-                    "record_id,record_name,address,city,state,zip,latitude,longitude,last_updated,permit_status,active_permit",
+                    "$select".to_owned(),
+                    "record_id,record_name,address,city,state,zip,latitude,longitude,last_updated,permit_status,active_permit".to_owned(),
                 ),
-                ("$where", where_clause),
-                ("$order", "last_updated DESC"),
-                ("$limit", limit.as_str()),
-            ])
-            .send()
-            .await
-            .context("San Diego Socrata request failed")?
-            .error_for_status()
-            .context("San Diego Socrata request returned non-success status")?
-            .json::<Vec<SanDiegoPermitRow>>()
-            .await
-            .context("San Diego Socrata response could not be parsed")?;
+                ("$where".to_owned(), where_clause.to_owned()),
+                ("$order".to_owned(), "last_updated DESC".to_owned()),
+                ("$limit".to_owned(), self.page_size.to_string()),
+                ("$offset".to_owned(), offset.to_string()),
+            ];
+
+            let page = self
+                .client
+                .get(&endpoint)
+                .query(&query)
+                .send()
+                .await
+                .context("San Diego Socrata request failed")?
+                .error_for_status()
+                .context("San Diego Socrata request returned non-success status")?
+                .json::<Vec<SanDiegoPermitRow>>()
+                .await
+                .context("San Diego Socrata response could not be parsed")?;
+
+            let page_count = page.len();
+            rows.extend(page);
+
+            if let Some(max_records) = self.max_records {
+                if rows.len() >= max_records {
+                    rows.truncate(max_records);
+                    break;
+                }
+            }
+
+            if page_count == 0 || page_count < self.page_size {
+                break;
+            }
+
+            offset = offset.saturating_add(page_count);
+        }
 
         let facilities = rows
             .into_iter()

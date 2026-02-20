@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use chrono::Utc;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::{
@@ -20,6 +21,21 @@ pub struct IngestionService {
     repository: Arc<dyn FacilityRepository>,
     trust_score_service: Arc<TrustScoreService>,
     connectors: Vec<Arc<dyn HealthDataConnector>>,
+    stats: Arc<RwLock<IngestionStats>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, Default)]
+pub struct ConnectorIngestionStats {
+    pub source: String,
+    pub fetched_records: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, Default)]
+pub struct IngestionStats {
+    pub last_refresh_at: Option<chrono::DateTime<Utc>>,
+    pub unique_facilities: usize,
+    pub connector_stats: Vec<ConnectorIngestionStats>,
 }
 
 impl IngestionService {
@@ -32,11 +48,17 @@ impl IngestionService {
             repository,
             trust_score_service,
             connectors,
+            stats: Arc::new(RwLock::new(IngestionStats::default())),
         }
+    }
+
+    pub async fn stats(&self) -> IngestionStats {
+        self.stats.read().await.clone()
     }
 
     pub async fn refresh(&self) -> anyhow::Result<()> {
         let mut stitched: HashMap<String, SourceFacilityInput> = HashMap::new();
+        let mut connector_stats = Vec::new();
 
         for connector in &self.connectors {
             match connector.fetch_facilities().await {
@@ -46,6 +68,11 @@ impl IngestionService {
                         records = records.len(),
                         "Fetched inspection records"
                     );
+                    connector_stats.push(ConnectorIngestionStats {
+                        source: connector.source_name().to_owned(),
+                        fetched_records: records.len(),
+                        error: None,
+                    });
 
                     for record in records {
                         let key = dedupe_key(&record);
@@ -60,6 +87,11 @@ impl IngestionService {
                     }
                 }
                 Err(error) => {
+                    connector_stats.push(ConnectorIngestionStats {
+                        source: connector.source_name().to_owned(),
+                        fetched_records: 0,
+                        error: Some(error.to_string()),
+                    });
                     warn!(
                         source = connector.source_name(),
                         error = %error,
@@ -79,7 +111,18 @@ impl IngestionService {
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
-        info!("Ingestion + normalization finished");
+        let snapshot = IngestionStats {
+            last_refresh_at: Some(Utc::now()),
+            unique_facilities: self.repository.list().await?.len(),
+            connector_stats,
+        };
+
+        *self.stats.write().await = snapshot.clone();
+
+        info!(
+            unique_facilities = snapshot.unique_facilities,
+            "Ingestion + normalization finished"
+        );
 
         Ok(())
     }

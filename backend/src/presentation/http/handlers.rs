@@ -46,7 +46,9 @@ pub async fn list_facilities(
         .await
         .map_err(internal_error)?;
 
-    Ok(Json(serde_json::json!({ "data": facilities })))
+    Ok(Json(
+        serde_json::json!({ "count": facilities.len(), "data": facilities }),
+    ))
 }
 
 pub async fn get_facility(
@@ -63,6 +65,14 @@ pub async fn get_facility(
         Some(record) => Ok(Json(serde_json::json!({ "data": record }))),
         None => Err((StatusCode::NOT_FOUND, "Facility not found".to_owned())),
     }
+}
+
+pub async fn ingestion_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let stats = state.ingestion_service.stats().await;
+
+    Ok(Json(serde_json::json!({ "data": stats })))
 }
 
 fn internal_error(error: impl std::fmt::Display) -> (StatusCode, String) {

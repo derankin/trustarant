@@ -21,8 +21,9 @@ Services:
 
 - Frontend: `http://localhost:15173`
 - Backend API: `http://localhost:18080`
-- Postgres: internal compose service (`postgres:5432`)
-- Redis: internal compose service (`redis:6379`)
+- Backend repository: currently in-memory (ingestion-backed; non-persistent between restarts)
+- Postgres: internal compose service (`postgres:5432`, provisioned for planned persistence migration)
+- Redis: internal compose service (`redis:6379`, provisioned for planned caching migration)
 
 ## Cloud Build (main triggers)
 

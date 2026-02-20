@@ -7,6 +7,13 @@ This backend is structured around clean architecture boundaries:
 - `infrastructure`: jurisdiction connectors, scheduler, and repository implementations
 - `presentation`: HTTP transport (Axum)
 
+## Current Database Type
+
+The runtime repository is currently **in-memory** (`InMemoryFacilityRepository`).
+Data is repopulated by ingestion on startup and on the scheduler interval.
+
+`postgres` and `redis` containers exist in `docker-compose.yml` for planned persistence/caching migration, but the current backend code path does not yet write to PostgreSQL.
+
 ## Run locally
 
 ```bash
@@ -29,6 +36,8 @@ Configure with environment variables:
 - `TRUSTARANT_SD_SOCRATA_BASE_URL`
 - `TRUSTARANT_SD_SOCRATA_DATASET_ID`
 - `TRUSTARANT_SD_SOCRATA_LIMIT`
+- `TRUSTARANT_SD_SOCRATA_PAGE_SIZE`
+- `TRUSTARANT_SD_SOCRATA_MAX_RECORDS` (optional cap)
 - `TRUSTARANT_SD_SOCRATA_ACTIVE_ONLY`
 - `TRUSTARANT_SD_SOCRATA_TIMEOUT_SECS`
 - `TRUSTARANT_SD_SOCRATA_APP_TOKEN` (optional but recommended)
@@ -52,6 +61,8 @@ Config:
 - `TRUSTARANT_LA_INSPECTIONS_URL`
 - `TRUSTARANT_LA_VIOLATIONS_URL`
 - `TRUSTARANT_LA_LIMIT`
+- `TRUSTARANT_LA_PAGE_SIZE`
+- `TRUSTARANT_LA_MAX_RECORDS` (optional cap)
 - `TRUSTARANT_LA_TIMEOUT_SECS`
 
 ### Long Beach (Live web page)
@@ -76,6 +87,8 @@ Config:
 - `TRUSTARANT_SBC_ARCGIS_URL`
 - `TRUSTARANT_RIVERSIDE_ARCGIS_URL` (optional)
 - `TRUSTARANT_LIVES_LIMIT`
+- `TRUSTARANT_LIVES_PAGE_SIZE`
+- `TRUSTARANT_LIVES_MAX_RECORDS` (optional cap)
 - `TRUSTARANT_LIVES_TIMEOUT_SECS`
 
 ### CPRA Imports (Orange + Pasadena)
@@ -101,6 +114,7 @@ docker compose up --build
 - `GET /health`
 - `GET /api/v1/facilities?q=sushi&latitude=34.0522&longitude=-118.2437&radius_miles=2&limit=20`
 - `GET /api/v1/facilities/{id}`
+- `GET /api/v1/system/ingestion` (last ingestion timestamp, per-source fetched counts, and total unique facilities)
 
 ## Notes
 

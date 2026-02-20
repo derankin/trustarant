@@ -13,7 +13,13 @@ type FacilitySummary = {
   latest_inspection_at?: string
 }
 
+type IngestionStats = {
+  last_refresh_at?: string
+  unique_facilities: number
+}
+
 const facilities = ref<FacilitySummary[]>([])
+const ingestionStats = ref<IngestionStats | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const search = ref('')
@@ -66,7 +72,20 @@ async function fetchFacilities() {
   }
 }
 
-onMounted(fetchFacilities)
+async function fetchIngestionStats() {
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/v1/system/ingestion`)
+    if (!response.ok) return
+    const payload = await response.json()
+    ingestionStats.value = payload.data ?? null
+  } catch {
+    // Non-blocking: stats are informative only.
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([fetchFacilities(), fetchIngestionStats()])
+})
 </script>
 
 <template>
@@ -138,6 +157,10 @@ onMounted(fetchFacilities)
         <h3 class="font-display text-2xl text-ink-950">Directory</h3>
         <span class="text-sm text-ink-900/65">{{ facilities.length }} result(s)</span>
       </header>
+
+      <p v-if="ingestionStats" class="text-xs text-ink-900/60">
+        Loaded {{ ingestionStats.unique_facilities.toLocaleString() }} facilities in latest ingestion.
+      </p>
 
       <p v-if="loading" class="rounded-2xl bg-white/70 px-4 py-3 text-sm">Loading latest trust scores...</p>
       <p v-else-if="error" class="rounded-2xl bg-alert-500/10 px-4 py-3 text-sm text-alert-500">{{ error }}</p>

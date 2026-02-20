@@ -13,7 +13,7 @@ use crate::{
 };
 
 const DEFAULT_SAN_BERNARDINO_ARCGIS_URL: &str = "https://services.arcgis.com/OUDgwkiMsqiL8Tvp/arcgis/rest/services/San_Bernardio_Co_Food_Grades/FeatureServer";
-const DEFAULT_LIMIT: usize = 1000;
+const DEFAULT_PAGE_SIZE: usize = 1000;
 const DEFAULT_TIMEOUT_SECS: u64 = 20;
 
 #[derive(Clone)]
@@ -21,7 +21,8 @@ pub struct LivesBatchConnector {
     client: Client,
     san_bernardino_url: String,
     riverside_url: Option<String>,
-    limit: usize,
+    page_size: usize,
+    max_records: Option<usize>,
 }
 
 impl Default for LivesBatchConnector {
@@ -38,10 +39,16 @@ impl LivesBatchConnector {
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
-        let limit = env::var("TRUSTARANT_LIVES_LIMIT")
+        let page_size = env::var("TRUSTARANT_LIVES_PAGE_SIZE")
+            .ok()
+            .or_else(|| env::var("TRUSTARANT_LIVES_LIMIT").ok())
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_PAGE_SIZE)
+            .max(1);
+        let max_records = env::var("TRUSTARANT_LIVES_MAX_RECORDS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_LIMIT);
+            .filter(|value| *value > 0);
         let timeout_secs = env::var("TRUSTARANT_LIVES_TIMEOUT_SECS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -56,7 +63,8 @@ impl LivesBatchConnector {
             client,
             san_bernardino_url,
             riverside_url,
-            limit,
+            page_size,
+            max_records,
         }
     }
 
@@ -67,29 +75,6 @@ impl LivesBatchConnector {
         id_prefix: &str,
     ) -> Result<Vec<SourceFacilityInput>> {
         let endpoint = format!("{}/0/query", source_url.trim_end_matches('/'));
-        let limit = self.limit.to_string();
-        let response: ArcGisResponse = self
-            .client
-            .get(endpoint)
-            .query(&[
-                ("where", "1=1"),
-                ("outFields", "*"),
-                ("resultRecordCount", limit.as_str()),
-                ("f", "json"),
-            ])
-            .send()
-            .await
-            .with_context(|| format!("{} ArcGIS request failed", jurisdiction.label()))?
-            .error_for_status()
-            .with_context(|| {
-                format!(
-                    "{} ArcGIS returned non-success status",
-                    jurisdiction.label()
-                )
-            })?
-            .json::<ArcGisResponse>()
-            .await
-            .with_context(|| format!("{} ArcGIS response parse failed", jurisdiction.label()))?;
 
         let default_coordinates = match jurisdiction {
             Jurisdiction::SanBernardinoCounty => (34.1083, -117.2898),
@@ -97,11 +82,40 @@ impl LivesBatchConnector {
             _ => (34.1083, -117.2898),
         };
 
-        let facilities = response
-            .features
-            .into_iter()
-            .enumerate()
-            .filter_map(|(idx, feature)| {
+        let mut facilities = Vec::new();
+        let mut offset = 0usize;
+
+        loop {
+            let query = vec![
+                ("where".to_owned(), "1=1".to_owned()),
+                ("outFields".to_owned(), "*".to_owned()),
+                ("resultOffset".to_owned(), offset.to_string()),
+                ("resultRecordCount".to_owned(), self.page_size.to_string()),
+                ("f".to_owned(), "json".to_owned()),
+            ];
+
+            let response: ArcGisResponse = self
+                .client
+                .get(&endpoint)
+                .query(&query)
+                .send()
+                .await
+                .with_context(|| format!("{} ArcGIS request failed", jurisdiction.label()))?
+                .error_for_status()
+                .with_context(|| {
+                    format!(
+                        "{} ArcGIS returned non-success status",
+                        jurisdiction.label()
+                    )
+                })?
+                .json::<ArcGisResponse>()
+                .await
+                .with_context(|| format!("{} ArcGIS response parse failed", jurisdiction.label()))?;
+
+            let page_count = response.features.len();
+            let page_start = facilities.len();
+
+            facilities.extend(response.features.into_iter().enumerate().filter_map(|(idx, feature)| {
                 let attrs = feature.attributes;
 
                 let name = attr_string(&attrs, &["Facility_Name", "FACILITY_NAME", "name"])?;
@@ -116,7 +130,7 @@ impl LivesBatchConnector {
                     ],
                 )
                 .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| format!("{id_prefix}-{idx}"));
+                .unwrap_or_else(|| format!("{id_prefix}-{}", page_start + idx));
 
                 let city = attr_string(&attrs, &["City", "CITY", "city"])
                     .unwrap_or_else(|| jurisdiction.label().to_owned());
@@ -164,8 +178,25 @@ impl LivesBatchConnector {
                     placard_status: None,
                     violations: Vec::new(),
                 })
-            })
-            .collect::<Vec<_>>();
+            }));
+
+            if let Some(max_records) = self.max_records {
+                if facilities.len() >= max_records {
+                    facilities.truncate(max_records);
+                    break;
+                }
+            }
+
+            if page_count == 0 {
+                break;
+            }
+
+            offset = offset.saturating_add(page_count);
+            let exceeded = response.exceeded_transfer_limit.unwrap_or(false);
+            if !exceeded && page_count < self.page_size {
+                break;
+            }
+        }
 
         Ok(facilities)
     }
@@ -199,6 +230,8 @@ impl HealthDataConnector for LivesBatchConnector {
 
 #[derive(Debug, Deserialize)]
 struct ArcGisResponse {
+    #[serde(rename = "exceededTransferLimit")]
+    exceeded_transfer_limit: Option<bool>,
     #[serde(default)]
     features: Vec<ArcGisFeature>,
 }
