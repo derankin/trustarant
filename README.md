@@ -23,3 +23,11 @@ Services:
 - Backend API: `http://localhost:18080`
 - Postgres: internal compose service (`postgres:5432`)
 - Redis: internal compose service (`redis:6379`)
+
+## Cloud Build (main triggers)
+
+After completing GitHub OAuth for the Cloud Build connection, run:
+
+```bash
+./scripts/create_cloudbuild_triggers.sh
+```
