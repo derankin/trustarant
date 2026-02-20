@@ -40,15 +40,15 @@ async function fetchFacilities() {
   loading.value = true
   error.value = null
 
-  const query = new URLSearchParams({
-    latitude: String(laLatitude),
-    longitude: String(laLongitude),
-    radius_miles: String(radiusMiles.value),
-    limit: '25',
-  })
+  const query = new URLSearchParams({ limit: '25' })
+  const term = search.value.trim()
 
-  if (search.value.trim()) {
-    query.set('q', search.value.trim())
+  if (term) {
+    query.set('q', term)
+  } else {
+    query.set('latitude', String(laLatitude))
+    query.set('longitude', String(laLongitude))
+    query.set('radius_miles', String(radiusMiles.value))
   }
 
   try {

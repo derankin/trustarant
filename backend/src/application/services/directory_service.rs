@@ -20,6 +20,11 @@ impl DirectoryService {
         query: FacilitySearchQuery,
     ) -> Result<Vec<FacilitySummary>, crate::domain::errors::RepositoryError> {
         let mut facilities = self.repository.list().await?;
+        let has_search_term = query
+            .q
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
 
         if let Some(term) = query
             .q
@@ -38,13 +43,17 @@ impl DirectoryService {
             }
         }
 
-        if let (Some(latitude), Some(longitude), Some(radius_miles)) =
-            (query.latitude, query.longitude, query.radius_miles)
-        {
-            facilities.retain(|facility| {
-                haversine_miles(latitude, longitude, facility.latitude, facility.longitude)
-                    <= radius_miles.max(0.1)
-            });
+        // Search terms (name/address/ZIP) should not be constrained by the default
+        // "near downtown LA" radius used for discovery mode.
+        if !has_search_term {
+            if let (Some(latitude), Some(longitude), Some(radius_miles)) =
+                (query.latitude, query.longitude, query.radius_miles)
+            {
+                facilities.retain(|facility| {
+                    haversine_miles(latitude, longitude, facility.latitude, facility.longitude)
+                        <= radius_miles.max(0.1)
+                });
+            }
         }
 
         facilities.sort_by(|left, right| {
