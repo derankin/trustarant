@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use chrono::Utc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use crate::{
@@ -22,6 +22,7 @@ pub struct IngestionService {
     trust_score_service: Arc<TrustScoreService>,
     connectors: Vec<Arc<dyn HealthDataConnector>>,
     stats: Arc<RwLock<IngestionStats>>,
+    refresh_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, Default)]
@@ -49,6 +50,7 @@ impl IngestionService {
             trust_score_service,
             connectors,
             stats: Arc::new(RwLock::new(IngestionStats::default())),
+            refresh_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -57,6 +59,7 @@ impl IngestionService {
     }
 
     pub async fn refresh(&self) -> anyhow::Result<()> {
+        let _guard = self.refresh_lock.lock().await;
         let mut stitched: HashMap<String, SourceFacilityInput> = HashMap::new();
         let mut connector_stats = Vec::new();
 

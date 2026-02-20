@@ -50,3 +50,15 @@ variable "disable_frontend_invoker_iam_check" {
   type        = bool
   default     = true
 }
+
+variable "enable_ingestion_scheduler" {
+  description = "When true, provisions Cloud Scheduler to trigger backend ingestion refresh endpoint"
+  type        = bool
+  default     = true
+}
+
+variable "ingestion_refresh_schedule" {
+  description = "Cron schedule for ingestion refresh trigger (UTC)"
+  type        = string
+  default     = "0 */6 * * *"
+}

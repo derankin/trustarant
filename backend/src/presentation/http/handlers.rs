@@ -5,6 +5,7 @@ use axum::{
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 use crate::{application::dto::FacilitySearchQuery, presentation::http::AppState};
 
@@ -73,6 +74,22 @@ pub async fn ingestion_status(
     let stats = state.ingestion_service.stats().await;
 
     Ok(Json(serde_json::json!({ "data": stats })))
+}
+
+pub async fn trigger_refresh(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let ingestion_service = state.ingestion_service.clone();
+    tokio::spawn(async move {
+        if let Err(err) = ingestion_service.refresh().await {
+            error!(error = %err, "Triggered ingestion refresh failed");
+        }
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "status": "queued" })),
+    ))
 }
 
 fn internal_error(error: impl std::fmt::Display) -> (StatusCode, String) {

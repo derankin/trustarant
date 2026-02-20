@@ -115,6 +115,7 @@ docker compose up --build
 - `GET /api/v1/facilities?q=sushi&latitude=34.0522&longitude=-118.2437&radius_miles=2&limit=20`
 - `GET /api/v1/facilities/{id}`
 - `GET /api/v1/system/ingestion` (last ingestion timestamp, per-source fetched counts, and total unique facilities)
+- `POST /api/v1/system/refresh` (queues an async ingestion refresh)
 
 ## Notes
 

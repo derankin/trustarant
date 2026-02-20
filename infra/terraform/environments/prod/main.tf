@@ -2,6 +2,7 @@ locals {
   required_apis = [
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
+    "cloudscheduler.googleapis.com",
     "iam.googleapis.com",
     "run.googleapis.com",
     "storage.googleapis.com"
@@ -139,4 +140,28 @@ resource "google_storage_bucket_iam_member" "frontend_public_read" {
   bucket = google_storage_bucket.frontend.name
   role   = "roles/storage.objectViewer"
   member = "allUsers"
+}
+
+resource "google_cloud_scheduler_job" "ingestion_refresh" {
+  count = var.enable_ingestion_scheduler ? 1 : 0
+
+  project     = var.project_id
+  name        = "trustarant-ingestion-refresh"
+  description = "Triggers backend ingestion refresh"
+  region      = var.region
+  schedule    = var.ingestion_refresh_schedule
+  time_zone   = "Etc/UTC"
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.api.uri}/api/v1/system/refresh"
+
+    headers = {
+      "Content-Type" = "application/json"
+    }
+
+    body = base64encode("{}")
+  }
+
+  depends_on = [google_project_service.required]
 }

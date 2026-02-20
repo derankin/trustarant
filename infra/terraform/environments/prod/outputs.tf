@@ -17,3 +17,8 @@ output "frontend_service_url" {
   value       = google_cloud_run_v2_service.frontend.uri
   description = "Public URL for the frontend web app"
 }
+
+output "ingestion_scheduler_job" {
+  value       = var.enable_ingestion_scheduler ? google_cloud_scheduler_job.ingestion_refresh[0].name : null
+  description = "Cloud Scheduler job name that triggers ingestion refresh"
+}
