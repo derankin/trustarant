@@ -25,10 +25,10 @@ pub trait HealthDataConnector: Send + Sync {
 
 pub fn default_connectors() -> Vec<Arc<dyn HealthDataConnector>> {
     vec![
-        Arc::new(LaCountyConnector),
-        Arc::new(SanDiegoConnector),
-        Arc::new(LongBeachConnector),
-        Arc::new(LivesBatchConnector),
-        Arc::new(CpraConnector),
+        Arc::new(LaCountyConnector::from_env()),
+        Arc::new(SanDiegoConnector::from_env()),
+        Arc::new(LongBeachConnector::from_env()),
+        Arc::new(LivesBatchConnector::from_env()),
+        Arc::new(CpraConnector::from_env()),
     ]
 }

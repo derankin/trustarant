@@ -8,8 +8,9 @@ This setup uses a two-step Terraform flow:
    - a remote state bucket
 2. `environments/prod/` provisions runtime resources:
    - Cloud Run service for the Rust backend
+   - Cloud Run service for the Vue frontend (nginx static container)
    - Artifact Registry repository
-   - public static hosting bucket for the Vue frontend
+   - private static bucket (optional fallback)
 
 ## 1) Bootstrap project + state bucket
 
@@ -42,17 +43,16 @@ terraform init \
 terraform apply
 ```
 
-## 3) Deploy the Vue frontend build
+## 3) Build and push frontend image
 
 ```bash
 cd ../../../frontend
-npm run build
-
-# Replace with your project + bucket
 PROJECT_ID=<project_id>
-BUCKET_NAME=<frontend_bucket_name>
+REGION=us-west1
 
-gcloud storage cp -r dist/* gs://${BUCKET_NAME}
+gcloud auth configure-docker ${REGION}-docker.pkg.dev
+docker build -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/frontend:latest .
+docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/frontend:latest
 ```
 
 ## 4) Build and push backend image
@@ -68,4 +68,4 @@ docker build -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/backend:latest
 docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/backend:latest
 ```
 
-Then rerun `terraform apply` in `environments/prod` to update Cloud Run to that image if needed.
+Then rerun `terraform apply` in `environments/prod` with `backend_image` and `frontend_image` set.

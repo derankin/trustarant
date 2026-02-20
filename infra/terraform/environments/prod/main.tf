@@ -68,6 +68,38 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "TRUSTARANT_HOST"
         value = "0.0.0.0"
       }
+
+      env {
+        name  = "TRUSTARANT_CORS_ORIGIN"
+        value = "*"
+      }
+    }
+  }
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_cloud_run_v2_service" "frontend" {
+  project              = var.project_id
+  name                 = "trustarant-web"
+  location             = var.region
+  ingress              = "INGRESS_TRAFFIC_ALL"
+  invoker_iam_disabled = var.disable_frontend_invoker_iam_check
+
+  template {
+    service_account = google_service_account.cloud_run_runtime.email
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 3
+    }
+
+    containers {
+      image = var.frontend_image
+
+      ports {
+        container_port = 80
+      }
     }
   }
 

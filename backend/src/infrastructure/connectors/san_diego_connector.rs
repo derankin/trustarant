@@ -1,6 +1,10 @@
-use anyhow::Result;
+use std::{env, time::Duration};
+
+use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use serde::Deserialize;
 
 use crate::{
     application::dto::SourceFacilityInput,
@@ -8,7 +12,87 @@ use crate::{
     infrastructure::connectors::HealthDataConnector,
 };
 
-pub struct SanDiegoConnector;
+const DEFAULT_BASE_URL: &str = "https://internal-sandiegocounty.data.socrata.com";
+const DEFAULT_DATASET_ID: &str = "c5ez-ufrd";
+const DEFAULT_LIMIT: usize = 5000;
+const DEFAULT_TIMEOUT_SECS: u64 = 20;
+
+#[derive(Clone)]
+pub struct SanDiegoConnector {
+    client: reqwest::Client,
+    base_url: String,
+    dataset_id: String,
+    limit: usize,
+    active_only: bool,
+}
+
+impl Default for SanDiegoConnector {
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
+impl SanDiegoConnector {
+    pub fn from_env() -> Self {
+        let base_url = env::var("TRUSTARANT_SD_SOCRATA_BASE_URL")
+            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned())
+            .trim_end_matches('/')
+            .to_owned();
+        let dataset_id = env::var("TRUSTARANT_SD_SOCRATA_DATASET_ID")
+            .unwrap_or_else(|_| DEFAULT_DATASET_ID.to_owned());
+        let limit = env::var("TRUSTARANT_SD_SOCRATA_LIMIT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_LIMIT);
+        let active_only = env::var("TRUSTARANT_SD_SOCRATA_ACTIVE_ONLY")
+            .ok()
+            .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(true);
+        let timeout_secs = env::var("TRUSTARANT_SD_SOCRATA_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+
+        let mut headers = HeaderMap::new();
+        if let Ok(app_token) = env::var("TRUSTARANT_SD_SOCRATA_APP_TOKEN") {
+            let trimmed = app_token.trim();
+            if !trimmed.is_empty() {
+                if let Ok(value) = HeaderValue::from_str(trimmed) {
+                    headers.insert(HeaderName::from_static("x-app-token"), value);
+                }
+            }
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .default_headers(headers)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        Self {
+            client,
+            base_url,
+            dataset_id,
+            limit,
+            active_only,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SanDiegoPermitRow {
+    record_id: Option<String>,
+    record_name: Option<String>,
+    address: Option<String>,
+    city: Option<String>,
+    state: Option<String>,
+    zip: Option<String>,
+    latitude: Option<String>,
+    longitude: Option<String>,
+    last_updated: Option<String>,
+    permit_status: Option<String>,
+    active_permit: Option<bool>,
+}
 
 #[async_trait]
 impl HealthDataConnector for SanDiegoConnector {
@@ -17,26 +101,157 @@ impl HealthDataConnector for SanDiegoConnector {
     }
 
     async fn fetch_facilities(&self) -> Result<Vec<SourceFacilityInput>> {
-        Ok(vec![SourceFacilityInput {
-            source_id: "SD-5562".to_owned(),
-            name: "Harbor Greens Kitchen".to_owned(),
-            address: "442 Harbor Dr".to_owned(),
-            city: "San Diego".to_owned(),
-            state: "CA".to_owned(),
-            postal_code: "92101".to_owned(),
-            latitude: 32.7112,
-            longitude: -117.1681,
-            jurisdiction: Jurisdiction::SanDiegoCounty,
-            inspected_at: Utc::now() - Duration::days(2),
-            raw_score: Some(89.0),
-            letter_grade: Some("B".to_owned()),
-            placard_status: None,
-            violations: vec![Violation {
-                code: "MRF-12".to_owned(),
-                description: "Improper cold holding".to_owned(),
-                points: 4,
-                critical: true,
-            }],
-        }])
+        // Source reference:
+        // docs/research/socal-food-safety-data-strategy.md
+        // The strategic framework documents San Diego as Socrata/SODA-first.
+        let endpoint = format!("{}/resource/{}.json", self.base_url, self.dataset_id);
+        let where_clause = if self.active_only {
+            "record_id IS NOT NULL AND record_name IS NOT NULL AND active_permit = true"
+        } else {
+            "record_id IS NOT NULL AND record_name IS NOT NULL"
+        };
+
+        let limit = self.limit.to_string();
+
+        let rows = self
+            .client
+            .get(endpoint)
+            .query(&[
+                (
+                    "$select",
+                    "record_id,record_name,address,city,state,zip,latitude,longitude,last_updated,permit_status,active_permit",
+                ),
+                ("$where", where_clause),
+                ("$order", "last_updated DESC"),
+                ("$limit", limit.as_str()),
+            ])
+            .send()
+            .await
+            .context("San Diego Socrata request failed")?
+            .error_for_status()
+            .context("San Diego Socrata request returned non-success status")?
+            .json::<Vec<SanDiegoPermitRow>>()
+            .await
+            .context("San Diego Socrata response could not be parsed")?;
+
+        let facilities = rows
+            .into_iter()
+            .filter_map(map_row_to_source_input)
+            .collect::<Vec<_>>();
+
+        Ok(facilities)
+    }
+}
+
+fn map_row_to_source_input(row: SanDiegoPermitRow) -> Option<SourceFacilityInput> {
+    let source_id = row.record_id?;
+    let name = row.record_name?;
+    let city = row.city.unwrap_or_else(|| "San Diego".to_owned());
+
+    // Most current records in c5ez-ufrd omit coordinates. Use city-level fallback
+    // to keep the directory searchable until the full graded inspection feed is wired.
+    let latitude = row
+        .latitude
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or_else(|| city_fallback_coordinates(&city).0);
+    let longitude = row
+        .longitude
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or_else(|| city_fallback_coordinates(&city).1);
+
+    let inspected_at = row
+        .last_updated
+        .as_deref()
+        .and_then(parse_socrata_datetime)
+        .unwrap_or_else(Utc::now);
+
+    let (raw_score, letter_grade, placard_status) = derive_scoring_signals(
+        row.permit_status.as_deref(),
+        row.active_permit.unwrap_or(true),
+    );
+
+    Some(SourceFacilityInput {
+        source_id,
+        name,
+        address: row.address.unwrap_or_default(),
+        city,
+        state: row.state.unwrap_or_else(|| "CA".to_owned()),
+        postal_code: row.zip.unwrap_or_default(),
+        latitude,
+        longitude,
+        jurisdiction: Jurisdiction::SanDiegoCounty,
+        inspected_at,
+        raw_score,
+        letter_grade,
+        placard_status,
+        violations: vec![Violation {
+            code: "SD-PERMIT".to_owned(),
+            description: "Derived from public permit status (Socrata Food Facility Permits feed)"
+                .to_owned(),
+            points: 0,
+            critical: false,
+        }],
+    })
+}
+
+fn parse_socrata_datetime(value: &str) -> Option<DateTime<Utc>> {
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
+        return Some(parsed.with_timezone(&Utc));
+    }
+
+    if let Ok(parsed) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.3f") {
+        return Some(DateTime::from_naive_utc_and_offset(parsed, Utc));
+    }
+
+    if let Ok(parsed) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {
+        return Some(DateTime::from_naive_utc_and_offset(parsed, Utc));
+    }
+
+    None
+}
+
+fn derive_scoring_signals(
+    permit_status: Option<&str>,
+    active_permit: bool,
+) -> (Option<f32>, Option<String>, Option<String>) {
+    if !active_permit {
+        return (Some(40.0), Some("C".to_owned()), Some("Red".to_owned()));
+    }
+
+    let status = permit_status.unwrap_or("").to_ascii_lowercase();
+
+    if status.contains("renewed") {
+        return (Some(92.0), Some("A".to_owned()), None);
+    }
+
+    if status.contains("issued") {
+        return (Some(88.0), Some("A".to_owned()), None);
+    }
+
+    if status.contains("expired") || status.contains("suspend") || status.contains("revok") {
+        return (Some(55.0), Some("C".to_owned()), Some("Yellow".to_owned()));
+    }
+
+    (None, None, None)
+}
+
+fn city_fallback_coordinates(city: &str) -> (f64, f64) {
+    match city.trim().to_ascii_uppercase().as_str() {
+        "SAN DIEGO" => (32.7157, -117.1611),
+        "CHULA VISTA" => (32.6401, -117.0842),
+        "ESCONDIDO" => (33.1192, -117.0864),
+        "OCEANSIDE" => (33.1959, -117.3795),
+        "CARLSBAD" => (33.1581, -117.3506),
+        "EL CAJON" => (32.7948, -116.9625),
+        "VISTA" => (33.2000, -117.2425),
+        "SAN MARCOS" => (33.1434, -117.1661),
+        "NATIONAL CITY" => (32.6781, -117.0992),
+        "LA MESA" => (32.7678, -117.0231),
+        "ENCINITAS" => (33.0369, -117.2919),
+        "SANTEE" => (32.8384, -116.9739),
+        "POWAY" => (32.9628, -117.0359),
+        "IMPERIAL BEACH" => (32.5839, -117.1131),
+        "LEMON GROVE" => (32.7426, -117.0317),
+        _ => (32.7157, -117.1611),
     }
 }

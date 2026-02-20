@@ -6,10 +6,7 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    application::dto::FacilitySearchQuery,
-    presentation::http::AppState,
-};
+use crate::{application::dto::FacilitySearchQuery, presentation::http::AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct FacilitySearchParams {

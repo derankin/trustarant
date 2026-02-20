@@ -12,7 +12,7 @@ use config::Settings;
 use infrastructure::{
     connectors::default_connectors, repositories::InMemoryFacilityRepository, scheduler,
 };
-use presentation::http::{routes::build_router, AppState};
+use presentation::http::{AppState, routes::build_router};
 use tokio::net::TcpListener;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
@@ -58,17 +58,26 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn app_router(state: AppState, settings: &Settings) -> Router {
-    let allow_origin = settings
-        .cors_origin
-        .parse::<axum::http::HeaderValue>()
-        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("http://localhost:5173"));
+    let cors = if settings.cors_origin.trim() == "*" {
+        CorsLayer::new()
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any)
+    } else {
+        let allow_origin = settings
+            .cors_origin
+            .parse::<axum::http::HeaderValue>()
+            .unwrap_or_else(|_| axum::http::HeaderValue::from_static("http://localhost:5173"));
 
-    let cors = CorsLayer::new()
-        .allow_origin(allow_origin)
-        .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any);
+        CorsLayer::new()
+            .allow_origin(allow_origin)
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any)
+    };
 
-    build_router(state).layer(TraceLayer::new_for_http()).layer(cors)
+    build_router(state)
+        .layer(TraceLayer::new_for_http())
+        .layer(cors)
 }
 
 fn init_tracing() {

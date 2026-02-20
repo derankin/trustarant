@@ -21,7 +21,11 @@ impl DirectoryService {
     ) -> Result<Vec<FacilitySummary>, crate::domain::errors::RepositoryError> {
         let mut facilities = self.repository.list().await?;
 
-        if let Some(term) = query.q.as_ref().map(|value| value.trim().to_ascii_lowercase()) {
+        if let Some(term) = query
+            .q
+            .as_ref()
+            .map(|value| value.trim().to_ascii_lowercase())
+        {
             if !term.is_empty() {
                 facilities.retain(|facility| {
                     let candidate = format!(
@@ -78,7 +82,10 @@ impl DirectoryService {
             jurisdiction: facility.jurisdiction.label().to_string(),
             trust_score: facility.trust_score,
             inspections_count: facility.inspections.len(),
-            latest_inspection_at: facility.inspections.first().map(|inspection| inspection.inspected_at),
+            latest_inspection_at: facility
+                .inspections
+                .first()
+                .map(|inspection| inspection.inspected_at),
         }))
     }
 }
@@ -95,7 +102,10 @@ fn to_summary(facility: Facility) -> FacilitySummary {
         longitude: facility.longitude,
         jurisdiction: facility.jurisdiction.label().to_string(),
         trust_score: facility.trust_score,
-        latest_inspection_at: facility.inspections.first().map(|inspection| inspection.inspected_at),
+        latest_inspection_at: facility
+            .inspections
+            .first()
+            .map(|inspection| inspection.inspected_at),
     }
 }
 
@@ -107,8 +117,8 @@ fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let dlat = (lat2 - lat1).to_radians();
     let dlon = (lon2 - lon1).to_radians();
 
-    let a = (dlat / 2.0).sin().powi(2)
-        + lat1_rad.cos() * lat2_rad.cos() * (dlon / 2.0).sin().powi(2);
+    let a =
+        (dlat / 2.0).sin().powi(2) + lat1_rad.cos() * lat2_rad.cos() * (dlon / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
 
     radius_miles * c

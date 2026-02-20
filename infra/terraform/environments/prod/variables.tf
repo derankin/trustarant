@@ -21,6 +21,12 @@ variable "frontend_bucket_name" {
   default     = ""
 }
 
+variable "frontend_image" {
+  description = "Container image for the frontend Cloud Run service"
+  type        = string
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
+}
+
 variable "disable_backend_invoker_iam_check" {
   description = "When true, Cloud Run allows unauthenticated access without allUsers IAM binding"
   type        = bool
@@ -37,4 +43,10 @@ variable "allow_public_frontend_bucket" {
   description = "When true, grants allUsers objectViewer on the frontend bucket"
   type        = bool
   default     = false
+}
+
+variable "disable_frontend_invoker_iam_check" {
+  description = "When true, frontend Cloud Run allows unauthenticated access without allUsers IAM"
+  type        = bool
+  default     = true
 }

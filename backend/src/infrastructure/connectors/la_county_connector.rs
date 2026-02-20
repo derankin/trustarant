@@ -1,6 +1,11 @@
-use anyhow::Result;
+use std::{collections::HashMap, env, time::Duration};
+
+use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Utc};
+use reqwest::Client;
+use serde::Deserialize;
+use tracing::warn;
 
 use crate::{
     application::dto::SourceFacilityInput,
@@ -8,7 +13,205 @@ use crate::{
     infrastructure::connectors::HealthDataConnector,
 };
 
-pub struct LaCountyConnector;
+const DEFAULT_INVENTORY_URL: &str = "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Environmental_Health_Restaurant_and_Market_Inventory_12312025/FeatureServer";
+const DEFAULT_INSPECTIONS_URL: &str = "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Environmental_Health_Restaurant_and_Market_Inspections_01012023_to_123120025/FeatureServer";
+const DEFAULT_VIOLATIONS_URL: &str = "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Environmental_Health_Restaurant_and_Market_Violations_01012023_to_123120025/FeatureServer";
+const DEFAULT_LIMIT: usize = 500;
+const QUERY_CHUNK_SIZE: usize = 50;
+
+#[derive(Clone)]
+pub struct LaCountyConnector {
+    client: Client,
+    inventory_url: String,
+    inspections_url: String,
+    violations_url: String,
+    limit: usize,
+}
+
+impl Default for LaCountyConnector {
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
+impl LaCountyConnector {
+    pub fn from_env() -> Self {
+        let inventory_url = env::var("TRUSTARANT_LA_INVENTORY_URL")
+            .unwrap_or_else(|_| DEFAULT_INVENTORY_URL.to_owned());
+        let inspections_url = env::var("TRUSTARANT_LA_INSPECTIONS_URL")
+            .unwrap_or_else(|_| DEFAULT_INSPECTIONS_URL.to_owned());
+        let violations_url = env::var("TRUSTARANT_LA_VIOLATIONS_URL")
+            .unwrap_or_else(|_| DEFAULT_VIOLATIONS_URL.to_owned());
+        let limit = env::var("TRUSTARANT_LA_LIMIT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_LIMIT);
+        let timeout_secs = env::var("TRUSTARANT_LA_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(20);
+
+        let client = Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
+        Self {
+            client,
+            inventory_url,
+            inspections_url,
+            violations_url,
+            limit,
+        }
+    }
+
+    async fn fetch_inspections(&self) -> Result<Vec<LaInspectionAttrs>> {
+        let limit = self.limit.to_string();
+        let response: ArcGisResponse<LaInspectionAttrs> = self
+            .client
+            .get(format!("{}/0/query", self.inspections_url.trim_end_matches('/')))
+            .query(&[
+                ("where", "FACILITY_ID IS NOT NULL"),
+                (
+                    "outFields",
+                    "ACTIVITY_DATE,FACILITY_ID,FACILITY_NAME,FACILITY_ADDRESS,FACILITY_CITY,FACILITY_STATE,FACILITY_ZIP,SCORE,GRADE,SERIAL_NUMBER",
+                ),
+                ("orderByFields", "ACTIVITY_DATE DESC"),
+                ("resultRecordCount", limit.as_str()),
+                ("f", "json"),
+            ])
+            .send()
+            .await
+            .context("LA inspections request failed")?
+            .error_for_status()
+            .context("LA inspections request returned non-success status")?
+            .json()
+            .await
+            .context("LA inspections response parse failed")?;
+
+        Ok(response
+            .features
+            .into_iter()
+            .map(|f| f.attributes)
+            .collect())
+    }
+
+    async fn fetch_inventory(
+        &self,
+        facility_ids: &[String],
+    ) -> Result<HashMap<String, LaInventoryAttrs>> {
+        if facility_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut inventory_map = HashMap::new();
+        for chunk in facility_ids.chunks(QUERY_CHUNK_SIZE) {
+            let where_clause = format!(
+                "FACILITY_ID IN ({})",
+                chunk
+                    .iter()
+                    .map(|id| format!("'{}'", id.trim().replace('\'', "''")))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+
+            let response: ArcGisResponse<LaInventoryAttrs> = self
+                .client
+                .get(format!("{}/0/query", self.inventory_url.trim_end_matches('/')))
+                .query(&[
+                    ("where", where_clause.as_str()),
+                    (
+                        "outFields",
+                        "FACILITY_ID,FACILITY_NAME,FACILITY_ADDRESS,FACILITY_CITY,FACILITY__STATE,FACILITY_ZIP,FACILITY_LATITUDE,FACILITY_LONGITUDE",
+                    ),
+                    ("f", "json"),
+                ])
+                .send()
+                .await
+                .context("LA inventory request failed")?
+                .error_for_status()
+                .context("LA inventory request returned non-success status")?
+                .json()
+                .await
+                .context("LA inventory response parse failed")?;
+
+            for attrs in response.features.into_iter().map(|f| f.attributes) {
+                if let Some(id) = attrs.facility_id.clone() {
+                    inventory_map.insert(id.trim().to_owned(), attrs);
+                }
+            }
+        }
+
+        Ok(inventory_map)
+    }
+
+    async fn fetch_violations(
+        &self,
+        serial_numbers: &[String],
+    ) -> Result<HashMap<String, Vec<Violation>>> {
+        if serial_numbers.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut grouped: HashMap<String, Vec<Violation>> = HashMap::new();
+        for chunk in serial_numbers.chunks(QUERY_CHUNK_SIZE) {
+            let where_clause = format!(
+                "SERIAL_NUMBER IN ({})",
+                chunk
+                    .iter()
+                    .map(|sn| format!("'{}'", sn.trim().replace('\'', "''")))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+
+            let chunk_limit = (chunk.len().saturating_mul(15)).to_string();
+            let response: ArcGisResponse<LaViolationAttrs> = self
+                .client
+                .get(format!(
+                    "{}/0/query",
+                    self.violations_url.trim_end_matches('/')
+                ))
+                .query(&[
+                    ("where", where_clause.as_str()),
+                    (
+                        "outFields",
+                        "SERIAL_NUMBER,VIOLATION_CODE,VIOLATION_DESCRIPTION,POINTS",
+                    ),
+                    ("resultRecordCount", chunk_limit.as_str()),
+                    ("f", "json"),
+                ])
+                .send()
+                .await
+                .context("LA violations request failed")?
+                .error_for_status()
+                .context("LA violations request returned non-success status")?
+                .json()
+                .await
+                .context("LA violations response parse failed")?;
+
+            for attrs in response.features.into_iter().map(|f| f.attributes) {
+                let Some(serial_number) = attrs.serial_number else {
+                    continue;
+                };
+
+                let points = attrs.points.unwrap_or(0) as i16;
+                grouped
+                    .entry(serial_number.trim().to_owned())
+                    .or_default()
+                    .push(Violation {
+                        code: attrs
+                            .violation_code
+                            .unwrap_or_else(|| "LA-UNKNOWN".to_owned()),
+                        description: attrs.violation_description.unwrap_or_default(),
+                        points,
+                        critical: points >= 4,
+                    });
+            }
+        }
+
+        Ok(grouped)
+    }
+}
 
 #[async_trait]
 impl HealthDataConnector for LaCountyConnector {
@@ -17,26 +220,160 @@ impl HealthDataConnector for LaCountyConnector {
     }
 
     async fn fetch_facilities(&self) -> Result<Vec<SourceFacilityInput>> {
-        Ok(vec![SourceFacilityInput {
-            source_id: "FAC-10021".to_owned(),
-            name: "Sunset Noodle House".to_owned(),
-            address: "1825 W Sunset Blvd".to_owned(),
-            city: "Los Angeles".to_owned(),
-            state: "CA".to_owned(),
-            postal_code: "90026".to_owned(),
-            latitude: 34.0789,
-            longitude: -118.2636,
-            jurisdiction: Jurisdiction::LosAngelesCounty,
-            inspected_at: Utc::now() - Duration::days(3),
-            raw_score: Some(94.0),
-            letter_grade: Some("A".to_owned()),
-            placard_status: None,
-            violations: vec![Violation {
-                code: "31A".to_owned(),
-                description: "Food contact surfaces not clean".to_owned(),
-                points: 2,
-                critical: false,
-            }],
-        }])
+        let inspections = self.fetch_inspections().await?;
+
+        let serial_numbers = inspections
+            .iter()
+            .filter_map(|inspection| inspection.serial_number.clone())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        let facility_ids = inspections
+            .iter()
+            .filter_map(|inspection| inspection.facility_id.clone())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+
+        let inventory = match self.fetch_inventory(&facility_ids).await {
+            Ok(records) => records,
+            Err(error) => {
+                warn!(error = %error, "LA inventory enrichment failed; proceeding without inventory join");
+                HashMap::new()
+            }
+        };
+        let violations = match self.fetch_violations(&serial_numbers).await {
+            Ok(records) => records,
+            Err(error) => {
+                warn!(error = %error, "LA violations enrichment failed; proceeding without violation join");
+                HashMap::new()
+            }
+        };
+
+        let facilities = inspections
+            .into_iter()
+            .filter_map(|inspection| {
+                let facility_id = inspection.facility_id?.trim().to_owned();
+                let serial_number = inspection.serial_number.clone().unwrap_or_default();
+                let inv = inventory.get(&facility_id);
+
+                let (latitude, longitude) = inv
+                    .map(|record| {
+                        (
+                            record.facility_latitude.unwrap_or(34.0522),
+                            record.facility_longitude.unwrap_or(-118.2437),
+                        )
+                    })
+                    .unwrap_or((34.0522, -118.2437));
+
+                let inspected_at = inspection
+                    .activity_date
+                    .and_then(DateTime::from_timestamp_millis)
+                    .unwrap_or_else(Utc::now);
+
+                Some(SourceFacilityInput {
+                    source_id: facility_id,
+                    name: inspection
+                        .facility_name
+                        .or_else(|| inv.and_then(|record| record.facility_name.clone()))
+                        .unwrap_or_else(|| "Unknown Facility".to_owned()),
+                    address: inspection
+                        .facility_address
+                        .or_else(|| inv.and_then(|record| record.facility_address.clone()))
+                        .unwrap_or_default(),
+                    city: inspection
+                        .facility_city
+                        .or_else(|| inv.and_then(|record| record.facility_city.clone()))
+                        .unwrap_or_else(|| "Los Angeles".to_owned()),
+                    state: inspection
+                        .facility_state
+                        .or_else(|| inv.and_then(|record| record.facility_state.clone()))
+                        .unwrap_or_else(|| "CA".to_owned()),
+                    postal_code: inspection
+                        .facility_zip
+                        .or_else(|| inv.and_then(|record| record.facility_zip.clone()))
+                        .unwrap_or_default(),
+                    latitude,
+                    longitude,
+                    jurisdiction: Jurisdiction::LosAngelesCounty,
+                    inspected_at,
+                    raw_score: inspection.score.map(|score| score as f32),
+                    letter_grade: inspection.grade,
+                    placard_status: None,
+                    violations: violations
+                        .get(serial_number.trim())
+                        .cloned()
+                        .unwrap_or_default(),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Ok(facilities)
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ArcGisResponse<T> {
+    features: Vec<ArcGisFeature<T>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArcGisFeature<T> {
+    attributes: T,
+}
+
+#[derive(Debug, Deserialize)]
+struct LaInspectionAttrs {
+    #[serde(rename = "ACTIVITY_DATE")]
+    activity_date: Option<i64>,
+    #[serde(rename = "FACILITY_ID")]
+    facility_id: Option<String>,
+    #[serde(rename = "FACILITY_NAME")]
+    facility_name: Option<String>,
+    #[serde(rename = "FACILITY_ADDRESS")]
+    facility_address: Option<String>,
+    #[serde(rename = "FACILITY_CITY")]
+    facility_city: Option<String>,
+    #[serde(rename = "FACILITY_STATE")]
+    facility_state: Option<String>,
+    #[serde(rename = "FACILITY_ZIP")]
+    facility_zip: Option<String>,
+    #[serde(rename = "SCORE")]
+    score: Option<f64>,
+    #[serde(rename = "GRADE")]
+    grade: Option<String>,
+    #[serde(rename = "SERIAL_NUMBER")]
+    serial_number: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LaInventoryAttrs {
+    #[serde(rename = "FACILITY_ID")]
+    facility_id: Option<String>,
+    #[serde(rename = "FACILITY_NAME")]
+    facility_name: Option<String>,
+    #[serde(rename = "FACILITY_ADDRESS")]
+    facility_address: Option<String>,
+    #[serde(rename = "FACILITY_CITY")]
+    facility_city: Option<String>,
+    #[serde(rename = "FACILITY__STATE")]
+    facility_state: Option<String>,
+    #[serde(rename = "FACILITY_ZIP")]
+    facility_zip: Option<String>,
+    #[serde(rename = "FACILITY_LATITUDE")]
+    facility_latitude: Option<f64>,
+    #[serde(rename = "FACILITY_LONGITUDE")]
+    facility_longitude: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LaViolationAttrs {
+    #[serde(rename = "SERIAL_NUMBER")]
+    serial_number: Option<String>,
+    #[serde(rename = "VIOLATION_CODE")]
+    violation_code: Option<String>,
+    #[serde(rename = "VIOLATION_DESCRIPTION")]
+    violation_description: Option<String>,
+    #[serde(rename = "POINTS")]
+    points: Option<i64>,
 }
