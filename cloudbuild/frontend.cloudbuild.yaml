@@ -1,0 +1,23 @@
+substitutions:
+  _BACKEND_URL: https://trustarant-api-3y7woju2vq-uw.a.run.app
+  _FRONTEND_BUCKET: trustarant-2b14-trustarant-web
+
+steps:
+  - name: node:24
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        cd frontend
+        npm ci
+        VITE_API_BASE_URL=${_BACKEND_URL} npm run build
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud storage rsync --recursive frontend/dist gs://${_FRONTEND_BUCKET}
+
+options:
+  logging: CLOUD_LOGGING_ONLY

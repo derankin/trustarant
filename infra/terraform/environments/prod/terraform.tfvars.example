@@ -1,0 +1,6 @@
+project_id    = "trustarant-xxxx"
+region        = "us-west1"
+backend_image = "us-docker.pkg.dev/trustarant-xxxx/trustarant/backend:latest"
+disable_backend_invoker_iam_check = true
+invoker_members = []
+allow_public_frontend_bucket = false

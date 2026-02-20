@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: trustarant-postgres
+    environment:
+      POSTGRES_DB: trustarant
+      POSTGRES_USER: trustarant
+      POSTGRES_PASSWORD: trustarant
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trustarant -d trustarant"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: trustarant-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trustarant-backend
+    environment:
+      TRUSTARANT_HOST: 0.0.0.0
+      TRUSTARANT_PORT: 8080
+      TRUSTARANT_CORS_ORIGIN: http://localhost:15173
+      TRUSTARANT_INGESTION_INTERVAL_HOURS: 24
+      DATABASE_URL: postgres://trustarant:trustarant@postgres:5432/trustarant
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "18080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:18080
+    container_name: trustarant-frontend
+    ports:
+      - "15173:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
