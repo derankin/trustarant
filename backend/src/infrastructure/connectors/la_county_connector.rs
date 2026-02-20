@@ -8,23 +8,19 @@ use serde::{Deserialize, de::DeserializeOwned};
 use tracing::warn;
 
 use crate::{
-    application::dto::SourceFacilityInput,
-    domain::entities::{Jurisdiction, Violation},
+    application::dto::SourceFacilityInput, domain::entities::Jurisdiction,
     infrastructure::connectors::HealthDataConnector,
 };
 
 const DEFAULT_INVENTORY_URL: &str = "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Environmental_Health_Restaurant_and_Market_Inventory_12312025/FeatureServer";
 const DEFAULT_INSPECTIONS_URL: &str = "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Environmental_Health_Restaurant_and_Market_Inspections_01012023_to_123120025/FeatureServer";
-const DEFAULT_VIOLATIONS_URL: &str = "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Environmental_Health_Restaurant_and_Market_Violations_01012023_to_123120025/FeatureServer";
 const DEFAULT_PAGE_SIZE: usize = 2_000;
-const QUERY_CHUNK_SIZE: usize = 50;
 
 #[derive(Clone)]
 pub struct LaCountyConnector {
     client: Client,
     inventory_url: String,
     inspections_url: String,
-    violations_url: String,
     page_size: usize,
     max_records: Option<usize>,
 }
@@ -41,8 +37,6 @@ impl LaCountyConnector {
             .unwrap_or_else(|_| DEFAULT_INVENTORY_URL.to_owned());
         let inspections_url = env::var("TRUSTARANT_LA_INSPECTIONS_URL")
             .unwrap_or_else(|_| DEFAULT_INSPECTIONS_URL.to_owned());
-        let violations_url = env::var("TRUSTARANT_LA_VIOLATIONS_URL")
-            .unwrap_or_else(|_| DEFAULT_VIOLATIONS_URL.to_owned());
         let page_size = env::var("TRUSTARANT_LA_PAGE_SIZE")
             .ok()
             .or_else(|| env::var("TRUSTARANT_LA_LIMIT").ok())
@@ -67,7 +61,6 @@ impl LaCountyConnector {
             client,
             inventory_url,
             inspections_url,
-            violations_url,
             page_size,
             max_records,
         }
@@ -139,102 +132,32 @@ impl LaCountyConnector {
         self.query_features(
             &self.inspections_url,
             "FACILITY_ID IS NOT NULL",
-            "ACTIVITY_DATE,FACILITY_ID,FACILITY_NAME,FACILITY_ADDRESS,FACILITY_CITY,FACILITY_STATE,FACILITY_ZIP,SCORE,GRADE,SERIAL_NUMBER",
+            "ACTIVITY_DATE,FACILITY_ID,FACILITY_NAME,FACILITY_ADDRESS,FACILITY_CITY,FACILITY_STATE,FACILITY_ZIP,SCORE,GRADE",
             Some("ACTIVITY_DATE DESC"),
         )
         .await
         .context("LA inspections request failed")
     }
 
-    async fn fetch_inventory(
-        &self,
-        facility_ids: &[String],
-    ) -> Result<HashMap<String, LaInventoryAttrs>> {
-        if facility_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
+    async fn fetch_inventory(&self) -> Result<HashMap<String, LaInventoryAttrs>> {
+        let rows: Vec<LaInventoryAttrs> = self
+            .query_features(
+                &self.inventory_url,
+                "FACILITY_ID IS NOT NULL",
+                "FACILITY_ID,FACILITY_NAME,FACILITY_ADDRESS,FACILITY_CITY,FACILITY__STATE,FACILITY_ZIP,FACILITY_LATITUDE,FACILITY_LONGITUDE",
+                None,
+            )
+            .await
+            .context("LA inventory request failed")?;
 
-        let mut inventory_map = HashMap::new();
-        for chunk in facility_ids.chunks(QUERY_CHUNK_SIZE) {
-            let where_clause = format!(
-                "FACILITY_ID IN ({})",
-                chunk
-                    .iter()
-                    .map(|id| format!("'{}'", id.trim().replace('\'', "''")))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
-
-            let rows: Vec<LaInventoryAttrs> = self
-                .query_features(
-                    &self.inventory_url,
-                    where_clause.as_str(),
-                    "FACILITY_ID,FACILITY_NAME,FACILITY_ADDRESS,FACILITY_CITY,FACILITY__STATE,FACILITY_ZIP,FACILITY_LATITUDE,FACILITY_LONGITUDE",
-                    None,
-                )
-                .await
-                .context("LA inventory request failed")?;
-
-            for attrs in rows {
-                if let Some(id) = attrs.facility_id.clone() {
-                    inventory_map.insert(id.trim().to_owned(), attrs);
-                }
+        let mut inventory_map = HashMap::with_capacity(rows.len());
+        for attrs in rows {
+            if let Some(id) = attrs.facility_id.clone() {
+                inventory_map.insert(id.trim().to_owned(), attrs);
             }
         }
 
         Ok(inventory_map)
-    }
-
-    async fn fetch_violations(
-        &self,
-        serial_numbers: &[String],
-    ) -> Result<HashMap<String, Vec<Violation>>> {
-        if serial_numbers.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let mut grouped: HashMap<String, Vec<Violation>> = HashMap::new();
-        for chunk in serial_numbers.chunks(QUERY_CHUNK_SIZE) {
-            let where_clause = format!(
-                "SERIAL_NUMBER IN ({})",
-                chunk
-                    .iter()
-                    .map(|sn| format!("'{}'", sn.trim().replace('\'', "''")))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
-
-            let rows: Vec<LaViolationAttrs> = self
-                .query_features(
-                    &self.violations_url,
-                    where_clause.as_str(),
-                    "SERIAL_NUMBER,VIOLATION_CODE,VIOLATION_DESCRIPTION,POINTS",
-                    None,
-                )
-                .await
-                .context("LA violations request failed")?;
-
-            for attrs in rows {
-                let Some(serial_number) = attrs.serial_number else {
-                    continue;
-                };
-
-                let points = attrs.points.unwrap_or(0) as i16;
-                grouped
-                    .entry(serial_number.trim().to_owned())
-                    .or_default()
-                    .push(Violation {
-                        code: attrs
-                            .violation_code
-                            .unwrap_or_else(|| "LA-UNKNOWN".to_owned()),
-                        description: attrs.violation_description.unwrap_or_default(),
-                        points,
-                        critical: points >= 4,
-                    });
-            }
-        }
-
-        Ok(grouped)
     }
 }
 
@@ -247,30 +170,10 @@ impl HealthDataConnector for LaCountyConnector {
     async fn fetch_facilities(&self) -> Result<Vec<SourceFacilityInput>> {
         let inspections = self.fetch_inspections().await?;
 
-        let serial_numbers = inspections
-            .iter()
-            .filter_map(|inspection| inspection.serial_number.clone())
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>();
-        let facility_ids = inspections
-            .iter()
-            .filter_map(|inspection| inspection.facility_id.clone())
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>();
-
-        let inventory = match self.fetch_inventory(&facility_ids).await {
+        let inventory = match self.fetch_inventory().await {
             Ok(records) => records,
             Err(error) => {
                 warn!(error = %error, "LA inventory enrichment failed; proceeding without inventory join");
-                HashMap::new()
-            }
-        };
-        let violations = match self.fetch_violations(&serial_numbers).await {
-            Ok(records) => records,
-            Err(error) => {
-                warn!(error = %error, "LA violations enrichment failed; proceeding without violation join");
                 HashMap::new()
             }
         };
@@ -279,7 +182,6 @@ impl HealthDataConnector for LaCountyConnector {
             .into_iter()
             .filter_map(|inspection| {
                 let facility_id = inspection.facility_id?.trim().to_owned();
-                let serial_number = inspection.serial_number.clone().unwrap_or_default();
                 let inv = inventory.get(&facility_id);
 
                 let (latitude, longitude) = inv
@@ -325,10 +227,7 @@ impl HealthDataConnector for LaCountyConnector {
                     raw_score: inspection.score.map(|score| score as f32),
                     letter_grade: inspection.grade,
                     placard_status: None,
-                    violations: violations
-                        .get(serial_number.trim())
-                        .cloned()
-                        .unwrap_or_default(),
+                    violations: Vec::new(),
                 })
             })
             .collect::<Vec<_>>();
@@ -369,8 +268,6 @@ struct LaInspectionAttrs {
     score: Option<f64>,
     #[serde(rename = "GRADE")]
     grade: Option<String>,
-    #[serde(rename = "SERIAL_NUMBER")]
-    serial_number: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -391,16 +288,4 @@ struct LaInventoryAttrs {
     facility_latitude: Option<f64>,
     #[serde(rename = "FACILITY_LONGITUDE")]
     facility_longitude: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LaViolationAttrs {
-    #[serde(rename = "SERIAL_NUMBER")]
-    serial_number: Option<String>,
-    #[serde(rename = "VIOLATION_CODE")]
-    violation_code: Option<String>,
-    #[serde(rename = "VIOLATION_DESCRIPTION")]
-    violation_description: Option<String>,
-    #[serde(rename = "POINTS")]
-    points: Option<i64>,
 }
