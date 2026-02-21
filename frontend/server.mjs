@@ -15,7 +15,7 @@ const publicBaseUrl = (process.env.PUBLIC_BASE_URL || 'https://cleanplated.com')
 const appTitle = 'CleanPlated'
 const defaultDescription =
   'CleanPlated helps you find safer food with Southern California restaurant health inspection data.'
-const defaultImage = `${publicBaseUrl}/social-card.svg`
+const defaultImage = `${publicBaseUrl}/social-card.png`
 
 const indexHtml = fs.readFileSync(indexPath, 'utf8')
 
@@ -50,6 +50,11 @@ const buildMetaTags = ({ title, description, url, image }) => {
     `<meta property="og:description" content="${safeDescription}" />`,
     `<meta property="og:url" content="${safeUrl}" />`,
     `<meta property="og:image" content="${safeImage}" />`,
+    `<meta property="og:image:secure_url" content="${safeImage}" />`,
+    `<meta property="og:image:type" content="image/png" />`,
+    `<meta property="og:image:width" content="1200" />`,
+    `<meta property="og:image:height" content="630" />`,
+    `<meta property="og:image:alt" content="${safeTitle}" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${safeTitle}" />`,
     `<meta name="twitter:description" content="${safeDescription}" />`,
