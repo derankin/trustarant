@@ -47,6 +47,11 @@ type FacilitiesResponse = {
   slice_counts?: SliceCounts
 }
 
+type TopPicksResponse = {
+  data: FacilitySummary[]
+  count: number
+}
+
 type SortMode = 'trust_desc' | 'recent_desc' | 'name_asc'
 type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
 type VoteType = 'like' | 'dislike'
@@ -128,8 +133,14 @@ const pageEnd = computed(() =>
 const paginationPageSizes = computed(() => pageSizeChoices)
 const topTenRanked = computed(() =>
   [...topTenFacilities.value].sort((left, right) => {
-    const leftScore = left.vote_score ?? 0
-    const rightScore = right.vote_score ?? 0
+    const leftLikes = left.likes ?? 0
+    const rightLikes = right.likes ?? 0
+    if (leftLikes !== rightLikes) {
+      return rightLikes - leftLikes
+    }
+
+    const leftScore = left.vote_score ?? leftLikes - (left.dislikes ?? 0)
+    const rightScore = right.vote_score ?? rightLikes - (right.dislikes ?? 0)
     if (leftScore !== rightScore) {
       return rightScore - leftScore
     }
@@ -263,6 +274,7 @@ const submitVote = async (facilityId: string, vote: VoteType) => {
       dislikes: Number(summary.dislikes ?? 0),
       vote_score: Number(summary.vote_score ?? 0),
     })
+    void fetchTopTen()
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'Vote submission failed'
     error.value = message
@@ -327,13 +339,12 @@ async function fetchTopTen() {
   topTenLoading.value = true
 
   try {
-    const query = buildFacilitiesQuery(1, 10, 'trust_desc')
-    const response = await fetch(`${apiBaseUrl}/api/v1/facilities?${query.toString()}`)
+    const response = await fetch(`${apiBaseUrl}/api/v1/facilities/top-picks?limit=10`)
     if (!response.ok) {
       throw new Error(`Failed to fetch top 10 (${response.status})`)
     }
 
-    const payload: FacilitiesResponse = await response.json()
+    const payload: TopPicksResponse = await response.json()
     topTenFacilities.value = (payload.data ?? []).map(withVoteDefaults)
   } catch {
     topTenFacilities.value = []
@@ -624,9 +635,9 @@ onMounted(async () => {
 
     <section class="trust-panel">
       <header class="trust-section-head">
-        <h2 class="trust-heading">Top 10 Community Picks</h2>
+        <h2 class="trust-heading">Top 10 Most Liked</h2>
       </header>
-      <p class="trust-note">Tap thumbs up or down to help rank trusted spots near you.</p>
+      <p class="trust-note">Ranked by total thumbs up across the community. Add your vote to influence this list.</p>
 
       <cv-inline-loading v-if="topTenLoading" state="loading" loading-text="Loading top facilities..." />
       <cv-inline-notification

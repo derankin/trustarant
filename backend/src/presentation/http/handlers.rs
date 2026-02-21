@@ -29,6 +29,11 @@ pub struct FacilitySearchParams {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TopPicksParams {
+    pub limit: Option<usize>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct HealthPayload {
     pub status: &'static str,
@@ -86,6 +91,23 @@ pub async fn get_facility(
         Some(record) => Ok(Json(serde_json::json!({ "data": record }))),
         None => Err((StatusCode::NOT_FOUND, "Facility not found".to_owned())),
     }
+}
+
+pub async fn top_picks(
+    State(state): State<AppState>,
+    Query(params): Query<TopPicksParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let limit = params.limit.unwrap_or(10).clamp(1, 50);
+    let data = state
+        .directory_service
+        .top_picks(limit)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(serde_json::json!({
+        "data": data,
+        "count": data.len(),
+    })))
 }
 
 pub async fn ingestion_status(

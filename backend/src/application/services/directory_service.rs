@@ -217,6 +217,49 @@ impl DirectoryService {
             vote_score: vote_summary.score(),
         }))
     }
+
+    pub async fn top_picks(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<FacilitySummary>, crate::domain::errors::RepositoryError> {
+        let facilities = self.repository.list().await?;
+        if facilities.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let capped_limit = limit.clamp(1, 50);
+        let facility_ids = facilities
+            .iter()
+            .map(|facility| facility.id.clone())
+            .collect::<Vec<_>>();
+        let vote_summaries = self
+            .repository
+            .get_facility_vote_summaries(&facility_ids)
+            .await?;
+
+        let mut ranked = facilities
+            .into_iter()
+            .map(|facility| {
+                let vote_summary = vote_summaries.get(&facility.id).cloned().unwrap_or_default();
+                (facility, vote_summary)
+            })
+            .collect::<Vec<_>>();
+
+        ranked.sort_by(|(left_facility, left_votes), (right_facility, right_votes)| {
+            right_votes
+                .likes
+                .cmp(&left_votes.likes)
+                .then(right_votes.score().cmp(&left_votes.score()))
+                .then(right_facility.trust_score.cmp(&left_facility.trust_score))
+                .then(right_facility.updated_at.cmp(&left_facility.updated_at))
+        });
+
+        Ok(ranked
+            .into_iter()
+            .take(capped_limit)
+            .map(|(facility, votes)| to_summary(facility, votes))
+            .collect::<Vec<_>>())
+    }
 }
 
 fn to_summary(facility: Facility, vote_summary: FacilityVoteSummary) -> FacilitySummary {
