@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use reqwest::Client;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::{
     application::dto::SourceFacilityInput,
@@ -18,12 +18,31 @@ use crate::{
 };
 
 const DEFAULT_TIMEOUT_SECS: u64 = 20;
+const DEFAULT_BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+const DEFAULT_OC_LIVE_ENDPOINT: &str = "https://inspections.myhealthdepartment.com/genericEndpoint";
+const DEFAULT_OC_LIVE_REFERER: &str =
+    "https://inspections.myhealthdepartment.com/orange-county/restaurant-closures";
+const DEFAULT_OC_LIVE_PAGE_SIZE: usize = 200;
+const DEFAULT_OC_LIVE_MAX_RECORDS: usize = 10_000;
+const DEFAULT_OC_LIVE_DAYS_WINDOW: u32 = 60;
+const DEFAULT_PASADENA_DIRECTORY_URL: &str = "https://services2.arcgis.com/zNjnZafDYCAJAbN0/arcgis/rest/services/Pasadena_Restaurant_Directory/FeatureServer/0";
+const DEFAULT_PASADENA_PAGE_SIZE: usize = 200;
+const DEFAULT_PASADENA_MAX_RECORDS: usize = 5_000;
 
 #[derive(Clone)]
 pub struct CpraConnector {
     client: Client,
     orange_county_url: Option<String>,
     pasadena_url: Option<String>,
+    oc_live_enabled: bool,
+    oc_live_endpoint: String,
+    oc_live_page_size: usize,
+    oc_live_max_records: usize,
+    oc_live_days_window: u32,
+    pasadena_live_enabled: bool,
+    pasadena_directory_url: String,
+    pasadena_page_size: usize,
+    pasadena_max_records: usize,
 }
 
 impl Default for CpraConnector {
@@ -47,8 +66,43 @@ impl CpraConnector {
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
+        let oc_live_enabled = parse_bool_env("TRUSTARANT_OC_LIVE_ENABLED", true);
+        let oc_live_endpoint = env::var("TRUSTARANT_OC_LIVE_ENDPOINT")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_OC_LIVE_ENDPOINT.to_owned());
+        let oc_live_page_size = env::var("TRUSTARANT_OC_LIVE_PAGE_SIZE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_OC_LIVE_PAGE_SIZE);
+        let oc_live_max_records = env::var("TRUSTARANT_OC_LIVE_MAX_RECORDS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_OC_LIVE_MAX_RECORDS);
+        let oc_live_days_window = env::var("TRUSTARANT_OC_LIVE_DAYS_WINDOW")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(DEFAULT_OC_LIVE_DAYS_WINDOW);
+
+        let pasadena_live_enabled = parse_bool_env("TRUSTARANT_PASADENA_LIVE_ENABLED", true);
+        let pasadena_directory_url = env::var("TRUSTARANT_PASADENA_DIRECTORY_URL")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_PASADENA_DIRECTORY_URL.to_owned());
+        let pasadena_page_size = env::var("TRUSTARANT_PASADENA_PAGE_SIZE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_PASADENA_PAGE_SIZE);
+        let pasadena_max_records = env::var("TRUSTARANT_PASADENA_MAX_RECORDS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_PASADENA_MAX_RECORDS);
+
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
+            .user_agent(DEFAULT_BROWSER_UA)
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -56,6 +110,15 @@ impl CpraConnector {
             client,
             orange_county_url,
             pasadena_url,
+            oc_live_enabled,
+            oc_live_endpoint,
+            oc_live_page_size,
+            oc_live_max_records,
+            oc_live_days_window,
+            pasadena_live_enabled,
+            pasadena_directory_url,
+            pasadena_page_size,
+            pasadena_max_records,
         }
     }
 
@@ -107,6 +170,211 @@ impl CpraConnector {
             .filter_map(|(idx, record)| map_record(record, jurisdiction.clone(), id_prefix, idx))
             .collect::<Vec<_>>())
     }
+
+    async fn fetch_orange_county_live(&self) -> Result<Vec<SourceFacilityInput>> {
+        let page_size = self.oc_live_page_size.clamp(1, 500);
+        let max_records = self.oc_live_max_records.max(1);
+
+        let inspection_purposes = [
+            "Inspection (Non-Routine)",
+            "Notice of Violation Reinspection",
+            "Reinspection",
+            "Routine Inspection",
+        ];
+
+        let mut rows = Vec::new();
+        let mut page = 1usize;
+        let mut total_available = usize::MAX;
+
+        while rows.len() < max_records && ((page - 1) * page_size) < total_available {
+            let filter_by_val = json!([
+                ["CLOSED", "CLOSED-OPERATOR INITIATED"],
+                [self.oc_live_days_window.to_string(), "0"],
+                ["Retail Food Facility Inspection"],
+                inspection_purposes
+            ])
+            .to_string();
+
+            let payload = json!({
+                "jurisdictionPath": "orange-county",
+                "requestType": "inspclosures",
+                "rows": page_size,
+                "page": page,
+                "searchTerm": "",
+                "filterBySrc": "[\"This_Form\", \"This_Form\", \"Inspection_Type\",\"This_Form\"]",
+                "filterByAct": "[\"EQUAL\", \"BETWEEN\", \"EQUAL\", \"EQUAL\"]",
+                "filterByCol": "[\"result\", \"inspectionDate\", \"type\", \"InspectionTypeMRS\"]",
+                "filterByVal": filter_by_val,
+                "sort": "This_Form.inspectionDate|DESC",
+            });
+
+            let response: Value = self
+                .client
+                .post(&self.oc_live_endpoint)
+                .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
+                .header(reqwest::header::ORIGIN, "https://inspections.myhealthdepartment.com")
+                .header(reqwest::header::REFERER, DEFAULT_OC_LIVE_REFERER)
+                .json(&payload)
+                .send()
+                .await
+                .context("Orange County live portal request failed")?
+                .error_for_status()
+                .context("Orange County live portal returned non-success status")?
+                .json()
+                .await
+                .context("Orange County live portal JSON parse failed")?;
+
+            if response
+                .get("error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                let message = response
+                    .get("msg")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown live portal error");
+                anyhow::bail!("Orange County live portal returned error: {message}");
+            }
+
+            total_available = response
+                .pointer("/data/availableRows")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(total_available);
+
+            let Some(data) = response.pointer("/data/DATA").and_then(Value::as_array) else {
+                break;
+            };
+
+            if data.is_empty() {
+                break;
+            }
+
+            for item in data {
+                if rows.len() >= max_records {
+                    break;
+                }
+
+                if let Some(record) = item.as_object().cloned() {
+                    rows.push(record);
+                }
+            }
+
+            if data.len() < page_size {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(rows
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, record)| map_record(record, Jurisdiction::OrangeCounty, "oc-live", idx))
+            .collect::<Vec<_>>())
+    }
+
+    async fn fetch_pasadena_live_directory(&self) -> Result<Vec<SourceFacilityInput>> {
+        let base_url = self.pasadena_directory_url.trim_end_matches('/').to_owned();
+        let query_url = format!("{base_url}/query");
+        let page_size = self.pasadena_page_size.clamp(1, 1_000);
+        let max_records = self.pasadena_max_records.max(1);
+
+        let count_response: Value = self
+            .client
+            .get(&query_url)
+            .query(&[
+                ("where", "1=1"),
+                ("returnCountOnly", "true"),
+                ("f", "json"),
+            ])
+            .send()
+            .await
+            .context("Pasadena directory count request failed")?
+            .error_for_status()
+            .context("Pasadena directory count request returned non-success status")?
+            .json()
+            .await
+            .context("Pasadena directory count JSON parse failed")?;
+
+        let total_count = count_response
+            .get("count")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or(0);
+
+        if total_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let target = total_count.min(max_records);
+        let mut rows = Vec::new();
+        let mut offset = 0usize;
+
+        while offset < target {
+            let request_count = (target - offset).min(page_size);
+            let response: Value = self
+                .client
+                .get(&query_url)
+                .query(&[
+                    ("where", "1=1"),
+                    ("outFields", "*"),
+                    ("returnGeometry", "true"),
+                    ("f", "json"),
+                    ("resultOffset", &offset.to_string()),
+                    ("resultRecordCount", &request_count.to_string()),
+                ])
+                .send()
+                .await
+                .context("Pasadena directory page request failed")?
+                .error_for_status()
+                .context("Pasadena directory page request returned non-success status")?
+                .json()
+                .await
+                .context("Pasadena directory page JSON parse failed")?;
+
+            let Some(features) = response.get("features").and_then(Value::as_array) else {
+                break;
+            };
+
+            if features.is_empty() {
+                break;
+            }
+
+            for feature in features {
+                if rows.len() >= target {
+                    break;
+                }
+
+                let Some(mut attributes) = feature.get("attributes").and_then(Value::as_object).cloned() else {
+                    continue;
+                };
+
+                if let Some(geometry) = feature.get("geometry").and_then(Value::as_object) {
+                    if let Some(latitude) = geometry.get("y").and_then(Value::as_f64) {
+                        attributes.insert("latitude".to_owned(), Value::from(latitude));
+                    }
+                    if let Some(longitude) = geometry.get("x").and_then(Value::as_f64) {
+                        attributes.insert("longitude".to_owned(), Value::from(longitude));
+                    }
+                }
+
+                rows.push(attributes);
+            }
+
+            if features.len() < request_count {
+                break;
+            }
+            offset += request_count;
+        }
+
+        Ok(rows
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, record)| {
+                map_record(record, Jurisdiction::Pasadena, "pas-live", idx)
+            })
+            .collect::<Vec<_>>())
+    }
 }
 
 #[async_trait]
@@ -116,30 +384,52 @@ impl HealthDataConnector for CpraConnector {
     }
 
     async fn fetch_facilities(&self) -> Result<Vec<SourceFacilityInput>> {
-        if self.orange_county_url.is_none() && self.pasadena_url.is_none() {
-            anyhow::bail!(
-                "CPRA connector not configured: set TRUSTARANT_OC_CPRA_EXPORT_URL and/or TRUSTARANT_PASADENA_CPRA_EXPORT_URL"
-            );
-        }
-
         let mut facilities = Vec::new();
+        let mut errors = Vec::new();
+        let mut source_enabled = false;
 
         if let Some(url) = &self.orange_county_url {
-            facilities.extend(
-                self.fetch_export(url, Jurisdiction::OrangeCounty, "oc")
-                    .await?,
-            );
+            source_enabled = true;
+            match self
+                .fetch_export(url, Jurisdiction::OrangeCounty, "oc")
+                .await
+            {
+                Ok(records) => facilities.extend(records),
+                Err(error) => errors.push(format!("Orange County CPRA export failed: {error:#}")),
+            }
+        } else if self.oc_live_enabled {
+            source_enabled = true;
+            match self.fetch_orange_county_live().await {
+                Ok(records) => facilities.extend(records),
+                Err(error) => errors.push(format!("Orange County live portal failed: {error:#}")),
+            }
         }
 
         if let Some(url) = &self.pasadena_url {
-            facilities.extend(
-                self.fetch_export(url, Jurisdiction::Pasadena, "pas")
-                    .await?,
-            );
+            source_enabled = true;
+            match self.fetch_export(url, Jurisdiction::Pasadena, "pas").await {
+                Ok(records) => facilities.extend(records),
+                Err(error) => errors.push(format!("Pasadena CPRA export failed: {error:#}")),
+            }
+        } else if self.pasadena_live_enabled {
+            source_enabled = true;
+            match self.fetch_pasadena_live_directory().await {
+                Ok(records) => facilities.extend(records),
+                Err(error) => errors.push(format!("Pasadena live directory failed: {error:#}")),
+            }
         }
 
         if facilities.is_empty() {
-            anyhow::bail!("CPRA connector fetched zero records from configured export URLs");
+            if !source_enabled {
+                anyhow::bail!(
+                    "CPRA connector not configured and live fallbacks disabled (set TRUSTARANT_OC_CPRA_EXPORT_URL and/or TRUSTARANT_PASADENA_CPRA_EXPORT_URL)"
+                );
+            }
+            if errors.is_empty() {
+                anyhow::bail!("CPRA connector fetched zero records from all enabled sources");
+            }
+
+            anyhow::bail!("CPRA connector failed across all enabled sources: {}", errors.join(" | "));
         }
 
         Ok(facilities)
@@ -226,6 +516,10 @@ fn map_record(
             "name",
             "record_name",
             "business_name",
+            "permitName",
+            "PR_Estabname",
+            "CERS_Estab_LKPname",
+            "Name_of_Restaurant_Cafe",
         ],
     )?;
     let address = rec_string(
@@ -236,18 +530,53 @@ fn map_record(
             "facility_address",
             "FACILITY_ADDRESS",
             "street_address",
+            "addressLine1",
+            "FacilityAddress",
+            "CERS_Est_AddaddressLine1",
+            "PR_EstAddressaddressLine1",
+            "Business_Address_in_Pasadena",
         ],
     )
     .unwrap_or_default();
-    let city = rec_string(&record, &["city", "City", "facility_city", "FACILITY_CITY"])
-        .unwrap_or_else(|| jurisdiction.label().to_owned());
+    let city = rec_string(
+        &record,
+        &[
+            "city",
+            "City",
+            "facility_city",
+            "FACILITY_CITY",
+            "facilityCity",
+            "CERS_Est_Addcity",
+            "PR_EstAddresscity",
+        ],
+    )
+    .unwrap_or_else(|| jurisdiction.label().to_owned());
     let postal_code = rec_string(
         &record,
-        &["postal_code", "Zip", "zip", "FACILITY_ZIP", "zipcode"],
+        &[
+            "postal_code",
+            "Zip",
+            "zip",
+            "FACILITY_ZIP",
+            "zipcode",
+            "facilityZip",
+            "CERS_Est_Addzip",
+            "PR_EstAddresszip",
+        ],
     )
     .unwrap_or_default();
-    let state = rec_string(&record, &["state", "State", "FACILITY_STATE"])
-        .unwrap_or_else(|| "CA".to_owned());
+    let state = rec_string(
+        &record,
+        &[
+            "state",
+            "State",
+            "FACILITY_STATE",
+            "facilityState",
+            "CERS_Est_Addstate",
+            "PR_EstAddressstate",
+        ],
+    )
+    .unwrap_or_else(|| "CA".to_owned());
 
     let source_id = rec_string(
         &record,
@@ -258,6 +587,9 @@ fn map_record(
             "record_id",
             "SERIAL_NUMBER",
             "id",
+            "permitNumber",
+            "inspectionID",
+            "ObjectID",
         ],
     )
     .filter(|value| !value.is_empty())
@@ -272,6 +604,8 @@ fn map_record(
             "status",
             "Placard_Status",
             "inspection_status",
+            "result",
+            "FacilityRatingStatus",
         ],
     );
 
@@ -294,6 +628,8 @@ fn map_record(
             "ACTIVITY_DATE",
             "date",
             "Date",
+            "inspectionDate",
+            "LastInspection",
         ],
     )
     .unwrap_or_else(Utc::now);
@@ -305,6 +641,8 @@ fn map_record(
             "VIOLATION_DESCRIPTION",
             "closure_reason",
             "reason",
+            "ReasonforClosure",
+            "generalComments",
         ],
     )
     .map(|description| {
@@ -426,6 +764,10 @@ fn rec_datetime(record: &Map<String, Value>, keys: &[&str]) -> Option<DateTime<U
         return Some(DateTime::from_naive_utc_and_offset(parsed, Utc));
     }
 
+    if let Ok(parsed) = NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%.f") {
+        return Some(DateTime::from_naive_utc_and_offset(parsed, Utc));
+    }
+
     if let Ok(parsed) = NaiveDateTime::parse_from_str(text, "%m/%d/%Y %H:%M:%S") {
         return Some(DateTime::from_naive_utc_and_offset(parsed, Utc));
     }
@@ -439,4 +781,16 @@ fn timestamp_to_datetime(raw: i64) -> Option<DateTime<Utc>> {
     } else {
         DateTime::from_timestamp(raw, 0)
     }
+}
+
+fn parse_bool_env(key: &str, default_value: bool) -> bool {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .and_then(|value| match value.as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(default_value)
 }

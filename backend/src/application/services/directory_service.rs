@@ -63,7 +63,7 @@ impl DirectoryService {
                 .then(right.updated_at.cmp(&left.updated_at))
         });
 
-        let limit = query.limit.unwrap_or(20).clamp(1, 100);
+        let limit = query.limit.unwrap_or(50).clamp(1, 2_000);
 
         Ok(facilities
             .into_iter()

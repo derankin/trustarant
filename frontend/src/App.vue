@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 type FacilitySummary = {
   id: string
@@ -29,6 +29,7 @@ type IngestionStats = {
 
 type SortMode = 'trust_desc' | 'recent_desc' | 'name_asc'
 type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
+type LocationState = 'default' | 'requesting' | 'granted' | 'denied' | 'unsupported'
 
 const fallbackLatitude = 34.0522
 const fallbackLongitude = -118.2437
@@ -38,17 +39,20 @@ const facilities = ref<FacilitySummary[]>([])
 const ingestionStats = ref<IngestionStats | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+
 const search = ref('')
 const radiusMiles = ref(2)
 const jurisdictionFilter = ref('all')
 const sortMode = ref<SortMode>('trust_desc')
 const scoreSlice = ref<ScoreSlice>('all')
 const recentOnly = ref(false)
+
 const userLocation = ref<{ latitude: number; longitude: number; accuracy: number } | null>(null)
-const locationState = ref<'fallback' | 'requesting' | 'granted' | 'denied' | 'unsupported'>(
-  'fallback',
-)
-const locationMessage = ref('Using Los Angeles fallback center.')
+const locationState = ref<LocationState>('default')
+const locationMessage = ref('Using Southern California default center (Downtown Los Angeles).')
+
+const currentPage = ref(1)
+const pageSize = ref(12)
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
 
@@ -57,7 +61,7 @@ const activeCenter = computed(() => {
     return {
       latitude: userLocation.value.latitude,
       longitude: userLocation.value.longitude,
-      label: 'Your browser location',
+      label: 'Your current location',
     }
   }
 
@@ -71,9 +75,9 @@ const activeCenter = computed(() => {
 const hasKeywordQuery = computed(() => search.value.trim().length > 0)
 
 const scoreBandMeta = (score: number) => {
-  if (score >= 90) return { label: 'Elite', className: 'cds--tag--green' }
-  if (score >= 80) return { label: 'Solid', className: 'cds--tag--warm-gray' }
-  return { label: 'Watch', className: 'cds--tag--red' }
+  if (score >= 90) return { label: 'Elite', className: 'score-chip--elite' }
+  if (score >= 80) return { label: 'Solid', className: 'score-chip--solid' }
+  return { label: 'Watch', className: 'score-chip--watch' }
 }
 
 const scoreSlices = computed(() => {
@@ -142,6 +146,47 @@ const filteredFacilities = computed(() => {
 
 const featured = computed(() => filteredFacilities.value[0])
 
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredFacilities.value.length / pageSize.value)))
+const paginatedFacilities = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredFacilities.value.slice(start, start + pageSize.value)
+})
+const pageWindow = computed(() => {
+  const pages: number[] = []
+  const maxVisible = 5
+  const half = Math.floor(maxVisible / 2)
+  let start = Math.max(1, currentPage.value - half)
+  let end = Math.min(totalPages.value, start + maxVisible - 1)
+
+  if (end - start + 1 < maxVisible) {
+    start = Math.max(1, end - maxVisible + 1)
+  }
+
+  for (let page = start; page <= end; page += 1) {
+    pages.push(page)
+  }
+  return pages
+})
+const pageStart = computed(() => {
+  if (filteredFacilities.value.length === 0) return 0
+  return (currentPage.value - 1) * pageSize.value + 1
+})
+const pageEnd = computed(() => Math.min(currentPage.value * pageSize.value, filteredFacilities.value.length))
+
+watch(
+  filteredFacilities,
+  () => {
+    if (currentPage.value > totalPages.value) {
+      currentPage.value = totalPages.value
+    }
+  },
+  { immediate: true },
+)
+
+watch([jurisdictionFilter, sortMode, scoreSlice, recentOnly], () => {
+  currentPage.value = 1
+})
+
 const lastRefreshLabel = computed(() => {
   if (!ingestionStats.value?.last_refresh_at) return 'Awaiting first successful ingestion'
   return new Date(ingestionStats.value.last_refresh_at).toLocaleString()
@@ -155,7 +200,7 @@ const formatSourceName = (source: string) => {
     san_diego_socrata: 'San Diego Socrata API',
     long_beach_closures_page: 'Long Beach Public Health',
     lives_batch_riv_sbc: 'Riverside + San Bernardino LIVES/ArcGIS',
-    cpra_import_orange_pasadena: 'Orange County + Pasadena CPRA',
+    cpra_import_orange_pasadena: 'Orange County + Pasadena Public Records/Portal',
   }
 
   return labels[source] ?? source.replace(/_/g, ' ')
@@ -197,11 +242,16 @@ const distanceLabel = (facility: FacilitySummary) => {
   return `${miles.toFixed(1)} mi`
 }
 
+const goToPage = (page: number) => {
+  currentPage.value = Math.min(totalPages.value, Math.max(1, page))
+}
+
 async function fetchFacilities() {
   loading.value = true
   error.value = null
+  currentPage.value = 1
 
-  const query = new URLSearchParams({ limit: '200' })
+  const query = new URLSearchParams({ limit: '1000' })
   const term = search.value.trim()
 
   if (term) {
@@ -263,20 +313,13 @@ async function requestBrowserLocation() {
       () => {
         userLocation.value = null
         locationState.value = 'denied'
-        locationMessage.value = 'Location permission denied. Using Los Angeles fallback center.'
+        locationMessage.value = 'Location permission denied. Reverting to Southern California default center.'
         resolve()
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 },
     )
   })
 
-  await fetchFacilities()
-}
-
-async function resetToFallback() {
-  userLocation.value = null
-  locationState.value = 'fallback'
-  locationMessage.value = 'Using Los Angeles fallback center.'
   await fetchFacilities()
 }
 
@@ -287,51 +330,44 @@ onMounted(async () => {
 
 <template>
   <main class="trust-shell">
-    <section class="cds--tile trust-hero">
-      <p class="trust-eyebrow">Trustaraunt</p>
-      <h1 class="cds--productive-heading-05">Find safer food, faster.</h1>
-      <p class="cds--body-compact-02">
-        Carbon-driven directory for Southern California food safety data with live Trust Scores.
-      </p>
+    <section class="panel panel--hero">
+      <p class="eyebrow">Trustaraunt</p>
+      <h1>Find safer food, faster.</h1>
+      <p class="lede">Southern California food safety data, normalized into one reliable Trust Score.</p>
 
-      <form class="trust-search" @submit.prevent="fetchFacilities">
-        <div class="cds--form-item">
-          <label class="cds--label" for="query">Search Directory</label>
+      <form class="search-row" @submit.prevent="fetchFacilities">
+        <label class="field-label" for="query">Search Directory</label>
+        <div class="search-controls">
           <input
             id="query"
             v-model="search"
-            class="cds--text-input"
+            class="text-input"
             type="text"
-            placeholder="Search by name, address, ZIP, or city"
+            placeholder="Search by business, address, ZIP, or city"
           />
+          <button class="btn btn--primary" type="submit">Search</button>
         </div>
-        <button class="cds--btn cds--btn--primary trust-btn" type="submit">
-          Search
-        </button>
       </form>
 
-      <div class="trust-actions">
+      <div class="action-row">
         <button
-          class="cds--btn cds--btn--secondary trust-btn"
+          class="btn btn--secondary"
           type="button"
           :disabled="locationState === 'requesting'"
           @click="requestBrowserLocation"
         >
           {{ locationState === 'requesting' ? 'Locating…' : 'Use Browser Location' }}
         </button>
-        <button class="cds--btn cds--btn--tertiary trust-btn" type="button" @click="resetToFallback">
-          Use LA Fallback
-        </button>
       </div>
 
-      <p class="cds--body-compact-01 trust-note">{{ locationMessage }}</p>
+      <p class="note">{{ locationMessage }}</p>
 
-      <div class="cds--form-item">
-        <label class="cds--label" for="radius">Radius ({{ radiusMiles.toFixed(1) }} mi)</label>
+      <div class="range-wrap">
+        <label class="field-label" for="radius">Radius ({{ radiusMiles.toFixed(1) }} mi)</label>
         <input
           id="radius"
           v-model.number="radiusMiles"
-          class="trust-range"
+          class="range-input"
           type="range"
           min="0.5"
           max="15"
@@ -339,144 +375,164 @@ onMounted(async () => {
           @change="fetchFacilities"
         />
       </div>
-      <p class="cds--body-compact-01 trust-note">
+      <p class="note">
         {{ hasKeywordQuery ? 'Keyword mode active (radius ignored).' : `Centering near ${activeCenter.label}.` }}
       </p>
     </section>
 
-    <section class="trust-grid">
-      <article class="cds--tile trust-stat-tile">
-        <p class="cds--label">Facilities Loaded</p>
-        <p class="cds--productive-heading-04">
-          {{ ingestionStats?.unique_facilities?.toLocaleString() ?? '0' }}
-        </p>
-        <p class="cds--body-compact-01 trust-note">Latest ingestion snapshot.</p>
+    <section class="stats-grid">
+      <article class="panel">
+        <p class="stat-label">Facilities Loaded</p>
+        <p class="stat-value">{{ ingestionStats?.unique_facilities?.toLocaleString() ?? '0' }}</p>
+        <p class="note">Latest ingestion snapshot.</p>
       </article>
 
-      <article class="cds--tile trust-stat-tile">
-        <p class="cds--label">Last Ingestion</p>
-        <p class="cds--body-02">{{ lastRefreshLabel }}</p>
-        <p class="cds--body-compact-01 trust-note">
-          Search center: {{ activeCenter.label }} · Radius: {{ radiusMiles.toFixed(1) }} mi
-        </p>
+      <article class="panel">
+        <p class="stat-label">Last Ingestion</p>
+        <p class="stat-date">{{ lastRefreshLabel }}</p>
+        <p class="note">Search center: {{ activeCenter.label }} · Radius: {{ radiusMiles.toFixed(1) }} mi</p>
       </article>
     </section>
 
-    <section class="cds--tile">
-      <header class="trust-section-head">
-        <h2 class="cds--productive-heading-03">Slice The Data</h2>
-        <span class="cds--tag cds--tag--outline">{{ filteredFacilities.length }} result(s)</span>
+    <section class="panel">
+      <header class="section-head">
+        <h2>Slice The Data</h2>
+        <span class="badge badge--muted">{{ filteredFacilities.length }} result(s)</span>
       </header>
 
-      <div class="trust-filters">
-        <div class="cds--form-item">
-          <label class="cds--label" for="jurisdiction">Jurisdiction</label>
-          <div class="cds--select">
-            <select id="jurisdiction" v-model="jurisdictionFilter" class="cds--select-input">
-              <option v-for="option in jurisdictionOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
-          </div>
+      <div class="filter-grid">
+        <div>
+          <label class="field-label" for="jurisdiction">Jurisdiction</label>
+          <select id="jurisdiction" v-model="jurisdictionFilter" class="select-input">
+            <option v-for="option in jurisdictionOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
         </div>
 
-        <div class="cds--form-item">
-          <label class="cds--label" for="sort">Sort</label>
-          <div class="cds--select">
-            <select id="sort" v-model="sortMode" class="cds--select-input">
-              <option value="trust_desc">Trust Score (High to Low)</option>
-              <option value="recent_desc">Most Recently Inspected</option>
-              <option value="name_asc">Name (A to Z)</option>
-            </select>
-          </div>
+        <div>
+          <label class="field-label" for="sort">Sort</label>
+          <select id="sort" v-model="sortMode" class="select-input">
+            <option value="trust_desc">Trust Score (High to Low)</option>
+            <option value="recent_desc">Most Recently Inspected</option>
+            <option value="name_asc">Name (A to Z)</option>
+          </select>
         </div>
       </div>
 
-      <div class="trust-slices">
-        <button class="cds--btn cds--btn--ghost trust-slice-btn" type="button" @click="scoreSlice = 'all'">
-          All <span class="cds--tag cds--tag--outline">{{ facilities.length }}</span>
+      <div class="slice-grid">
+        <button class="slice-btn" :class="{ 'slice-btn--active': scoreSlice === 'all' }" type="button" @click="scoreSlice = 'all'">
+          <span>All</span>
+          <span class="badge badge--muted">{{ facilities.length }}</span>
         </button>
-        <button class="cds--btn cds--btn--ghost trust-slice-btn" type="button" @click="scoreSlice = 'elite'">
-          Elite <span class="cds--tag cds--tag--green">{{ scoreSlices.elite }}</span>
+        <button class="slice-btn" :class="{ 'slice-btn--active': scoreSlice === 'elite' }" type="button" @click="scoreSlice = 'elite'">
+          <span>Elite</span>
+          <span class="badge badge--elite">{{ scoreSlices.elite }}</span>
         </button>
-        <button class="cds--btn cds--btn--ghost trust-slice-btn" type="button" @click="scoreSlice = 'solid'">
-          Solid <span class="cds--tag cds--tag--warm-gray">{{ scoreSlices.solid }}</span>
+        <button class="slice-btn" :class="{ 'slice-btn--active': scoreSlice === 'solid' }" type="button" @click="scoreSlice = 'solid'">
+          <span>Solid</span>
+          <span class="badge badge--solid">{{ scoreSlices.solid }}</span>
         </button>
-        <button class="cds--btn cds--btn--ghost trust-slice-btn" type="button" @click="scoreSlice = 'watch'">
-          Watch <span class="cds--tag cds--tag--red">{{ scoreSlices.watch }}</span>
+        <button class="slice-btn" :class="{ 'slice-btn--active': scoreSlice === 'watch' }" type="button" @click="scoreSlice = 'watch'">
+          <span>Watch</span>
+          <span class="badge badge--watch">{{ scoreSlices.watch }}</span>
         </button>
       </div>
 
-      <label class="trust-checkbox" for="recent-only">
-        <input id="recent-only" v-model="recentOnly" class="trust-checkbox-input" type="checkbox" />
-        <span class="cds--body-compact-02">Only show inspections from the last 90 days</span>
+      <label class="checkbox-row" for="recent-only">
+        <input id="recent-only" v-model="recentOnly" class="checkbox-input" type="checkbox" />
+        <span>Only show inspections from the last 90 days</span>
       </label>
     </section>
 
-    <section v-if="featured" class="cds--tile">
-      <p class="cds--label">Top Match In Current Slice</p>
-      <h3 class="cds--productive-heading-03">{{ featured.name }}</h3>
-      <p class="cds--body-02">{{ featured.address }}, {{ featured.city }} {{ featured.postal_code }}</p>
-      <div class="trust-inline-tags">
-        <span class="cds--tag cds--tag--outline">{{ featured.jurisdiction }}</span>
-        <span class="cds--tag" :class="scoreBandMeta(featured.trust_score).className">
+    <section v-if="featured" class="panel">
+      <p class="stat-label">Top Match In Current Slice</p>
+      <h3>{{ featured.name }}</h3>
+      <p class="card-address">{{ featured.address }}, {{ featured.city }} {{ featured.postal_code }}</p>
+      <div class="chip-row">
+        <span class="badge badge--muted">{{ featured.jurisdiction }}</span>
+        <span class="badge" :class="scoreBandMeta(featured.trust_score).className">
           {{ scoreBandMeta(featured.trust_score).label }} · {{ featured.trust_score }}
         </span>
-        <span v-if="distanceLabel(featured)" class="cds--tag cds--tag--outline">{{ distanceLabel(featured) }}</span>
+        <span v-if="distanceLabel(featured)" class="badge badge--muted">{{ distanceLabel(featured) }}</span>
       </div>
-      <p class="cds--body-compact-01 trust-note">Last inspection: {{ formatDate(featured.latest_inspection_at) }}</p>
+      <p class="note">Last inspection: {{ formatDate(featured.latest_inspection_at) }}</p>
     </section>
 
-    <section class="cds--tile">
-      <header class="trust-section-head">
-        <h2 class="cds--productive-heading-03">Directory</h2>
-        <span class="cds--tag cds--tag--outline">{{ filteredFacilities.length }} result(s)</span>
+    <section class="panel">
+      <header class="section-head">
+        <h2>Directory</h2>
+        <span class="badge badge--muted">{{ filteredFacilities.length }} result(s)</span>
       </header>
 
-      <p v-if="loading" class="cds--body-01">Loading latest trust scores…</p>
-      <p v-else-if="error" class="trust-error">{{ error }}</p>
-      <p v-else-if="filteredFacilities.length === 0" class="cds--body-01">
+      <p class="note" v-if="filteredFacilities.length > 0">
+        Showing {{ pageStart }}–{{ pageEnd }} of {{ filteredFacilities.length }}
+      </p>
+
+      <p v-if="loading" class="status-text">Loading latest trust scores…</p>
+      <p v-else-if="error" class="status-text status-text--error">{{ error }}</p>
+      <p v-else-if="filteredFacilities.length === 0" class="status-text">
         No facilities matched this slice. Try a wider radius or fewer filters.
       </p>
 
-      <ul v-else class="trust-list">
-        <li v-for="facility in filteredFacilities" :key="facility.id" class="cds--tile trust-list-item">
-          <div>
-            <p class="cds--body-02 trust-list-title">{{ facility.name }}</p>
-            <p class="cds--body-compact-02">{{ facility.address }}, {{ facility.city }} {{ facility.postal_code }}</p>
-            <div class="trust-inline-tags">
-              <span class="cds--tag cds--tag--outline">{{ facility.jurisdiction }}</span>
-              <span v-if="distanceLabel(facility)" class="cds--tag cds--tag--outline">{{ distanceLabel(facility) }}</span>
+      <ul v-else class="directory-list">
+        <li v-for="facility in paginatedFacilities" :key="facility.id" class="directory-item">
+          <div class="directory-main">
+            <p class="directory-title">{{ facility.name }}</p>
+            <p class="card-address">{{ facility.address }}, {{ facility.city }} {{ facility.postal_code }}</p>
+            <div class="chip-row">
+              <span class="badge badge--muted">{{ facility.jurisdiction }}</span>
+              <span v-if="distanceLabel(facility)" class="badge badge--muted">{{ distanceLabel(facility) }}</span>
             </div>
-            <p class="cds--body-compact-01 trust-note">Inspected {{ formatDate(facility.latest_inspection_at) }}</p>
+            <p class="note">Inspected {{ formatDate(facility.latest_inspection_at) }}</p>
           </div>
-          <span class="cds--tag" :class="scoreBandMeta(facility.trust_score).className">
+          <span class="badge score-pill" :class="scoreBandMeta(facility.trust_score).className">
             {{ facility.trust_score }}
           </span>
         </li>
       </ul>
+
+      <div v-if="filteredFacilities.length > pageSize" class="pagination">
+        <button class="btn btn--secondary" type="button" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">
+          Previous
+        </button>
+        <div class="page-buttons">
+          <button
+            v-for="page in pageWindow"
+            :key="page"
+            class="page-btn"
+            :class="{ 'page-btn--active': page === currentPage }"
+            type="button"
+            @click="goToPage(page)"
+          >
+            {{ page }}
+          </button>
+        </div>
+        <button class="btn btn--secondary" type="button" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">
+          Next
+        </button>
+      </div>
     </section>
 
-    <section class="cds--tile">
-      <header class="trust-section-head">
-        <h2 class="cds--productive-heading-03">Data Provenance</h2>
+    <section class="panel">
+      <header class="section-head">
+        <h2>Data Provenance</h2>
       </header>
-      <p class="cds--body-compact-02">
-        Trustaraunt aggregates LA County Open Data, San Diego Socrata, Long Beach public feeds, and CPRA/LIVES imports
-        across Orange County, Pasadena, Riverside, and San Bernardino.
+      <p class="note">
+        Trustaraunt aggregates LA County Open Data, San Diego Socrata, Long Beach public feeds, and Orange/Pasadena public-record or portal data, plus Riverside/San Bernardino LIVES.
       </p>
-      <ul class="trust-connectors">
-        <li v-for="connector in connectorRows" :key="connector.source" class="trust-connector-row">
+      <ul class="provenance-list">
+        <li v-for="connector in connectorRows" :key="connector.source" class="provenance-row">
           <div>
-            <p class="cds--body-compact-02 trust-list-title">{{ formatSourceName(connector.source) }}</p>
-            <p class="cds--body-compact-01 trust-note">
+            <p class="directory-title">{{ formatSourceName(connector.source) }}</p>
+            <p class="note">
               {{ connector.error ? 'Unavailable in latest ingestion run' : `${connector.fetched_records.toLocaleString()} records fetched` }}
             </p>
-            <p v-if="connector.error" class="cds--body-compact-01 trust-connector-error">
+            <p v-if="connector.error" class="status-text status-text--error">
               {{ summarizeConnectorError(connector.error) }}
             </p>
           </div>
-          <span class="cds--tag" :class="connector.error ? 'cds--tag--red' : 'cds--tag--green'">
+          <span class="badge" :class="connector.error ? 'badge--watch' : 'badge--elite'">
             {{ connector.error ? 'Error' : 'Healthy' }}
           </span>
         </li>

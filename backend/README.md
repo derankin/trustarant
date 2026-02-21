@@ -105,16 +105,30 @@ Config:
 
 ### CPRA Imports (Orange + Pasadena)
 
-`CpraConnector` fetches real CPRA export URLs (CSV or JSON) when provided.
+`CpraConnector` uses a tiered strategy:
+
+- Orange County: live `myhealthdepartment` restaurant-closure API ingestion (default),
+  or CPRA export URL when configured.
+- Pasadena: live ArcGIS restaurant directory ingestion (default), or CPRA export URL
+  when configured.
 
 Config:
 
 - `TRUSTARANT_OC_CPRA_EXPORT_URL`
 - `TRUSTARANT_PASADENA_CPRA_EXPORT_URL`
 - `TRUSTARANT_CPRA_TIMEOUT_SECS`
+- `TRUSTARANT_OC_LIVE_ENABLED`
+- `TRUSTARANT_OC_LIVE_ENDPOINT`
+- `TRUSTARANT_OC_LIVE_PAGE_SIZE`
+- `TRUSTARANT_OC_LIVE_MAX_RECORDS`
+- `TRUSTARANT_OC_LIVE_DAYS_WINDOW`
+- `TRUSTARANT_PASADENA_LIVE_ENABLED`
+- `TRUSTARANT_PASADENA_DIRECTORY_URL`
+- `TRUSTARANT_PASADENA_PAGE_SIZE`
+- `TRUSTARANT_PASADENA_MAX_RECORDS`
 
-If neither export URL is configured, connector status is reported as error
-(`not configured`) so the dashboard does not show a misleading "healthy 0 records".
+If CPRA URLs are omitted, live fallbacks run automatically. Disable fallbacks only if
+you intentionally want CPRA-only behavior.
 
 ## Run with Docker Compose
 
@@ -141,5 +155,5 @@ Compose starts:
 ## Notes
 
 - All connectors now use live network calls and emit no hardcoded sample facilities.
-- Riverside and CPRA sources are environment-driven where direct public machine-readable feeds are not consistently available.
+- Riverside and CPRA sources support environment-driven overrides when you have higher-fidelity exports.
 - The San Diego feed currently exposes permit-status metadata; Trust Score signals are derived from those fields until full inspection-line datasets are integrated.

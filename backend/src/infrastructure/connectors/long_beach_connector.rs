@@ -15,7 +15,7 @@ const DEFAULT_CLOSURES_URL: &str =
     "https://www.longbeach.gov/health/inspections-and-reporting/inspections/restaurant-closures/";
 const DEFAULT_CLOSURES_URL_FALLBACK: &str =
     "https://longbeach.gov/health/inspections-and-reporting/inspections/restaurant-closures/";
-const DEFAULT_LIMIT: usize = 200;
+const DEFAULT_LIMIT: usize = 2_000;
 
 #[derive(Clone)]
 pub struct LongBeachConnector {
@@ -205,6 +205,7 @@ fn parse_long_beach_date(value: &str) -> Option<chrono::DateTime<Utc>> {
 
     let date = NaiveDate::parse_from_str(cleaned, "%m/%d/%Y")
         .ok()
+        .or_else(|| NaiveDate::parse_from_str(cleaned, "%m/%d/%y").ok())
         .or_else(|| NaiveDate::parse_from_str(cleaned, "%m-%d-%Y").ok())?;
     let naive = date.and_hms_opt(0, 0, 0)?;
     Some(Utc.from_utc_datetime(&naive))
