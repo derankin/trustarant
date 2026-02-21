@@ -1,7 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use chrono::Utc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
+use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
 use crate::{
@@ -10,7 +11,7 @@ use crate::{
         services::{ScoreSignals, TrustScoreService},
     },
     domain::{
-        entities::{Facility, Inspection},
+        entities::{ConnectorIngestionStatus, Facility, Inspection, SystemIngestionStatus},
         repositories::FacilityRepository,
     },
     infrastructure::connectors::HealthDataConnector,
@@ -21,22 +22,16 @@ pub struct IngestionService {
     repository: Arc<dyn FacilityRepository>,
     trust_score_service: Arc<TrustScoreService>,
     connectors: Vec<Arc<dyn HealthDataConnector>>,
-    stats: Arc<RwLock<IngestionStats>>,
     refresh_lock: Arc<Mutex<()>>,
 }
 
-#[derive(Clone, Debug, serde::Serialize, Default)]
-pub struct ConnectorIngestionStats {
-    pub source: String,
-    pub fetched_records: usize,
-    pub error: Option<String>,
-}
+const CONNECTOR_MAX_ATTEMPTS: usize = 3;
 
 #[derive(Clone, Debug, serde::Serialize, Default)]
 pub struct IngestionStats {
     pub last_refresh_at: Option<chrono::DateTime<Utc>>,
     pub unique_facilities: usize,
-    pub connector_stats: Vec<ConnectorIngestionStats>,
+    pub connector_stats: Vec<ConnectorIngestionStatus>,
 }
 
 impl IngestionService {
@@ -49,29 +44,43 @@ impl IngestionService {
             repository,
             trust_score_service,
             connectors,
-            stats: Arc::new(RwLock::new(IngestionStats::default())),
             refresh_lock: Arc::new(Mutex::new(())),
         }
     }
 
     pub async fn stats(&self) -> IngestionStats {
-        self.stats.read().await.clone()
+        match self.repository.get_system_ingestion_status().await {
+            Ok(Some(status)) => IngestionStats {
+                last_refresh_at: Some(status.last_refresh_at),
+                unique_facilities: status.unique_facilities,
+                connector_stats: status.connector_stats,
+            },
+            Ok(None) | Err(_) => IngestionStats::default(),
+        }
     }
 
     pub async fn refresh(&self) -> anyhow::Result<()> {
         let _guard = self.refresh_lock.lock().await;
         let mut stitched: HashMap<String, SourceFacilityInput> = HashMap::new();
         let mut connector_stats = Vec::new();
+        let mut successful_connectors = 0usize;
+        let previous_status = self
+            .repository
+            .get_system_ingestion_status()
+            .await
+            .ok()
+            .flatten();
 
         for connector in &self.connectors {
-            match connector.fetch_facilities().await {
+            match self.fetch_with_retry(connector.as_ref()).await {
                 Ok(records) => {
+                    successful_connectors += 1;
                     info!(
                         source = connector.source_name(),
                         records = records.len(),
                         "Fetched inspection records"
                     );
-                    connector_stats.push(ConnectorIngestionStats {
+                    connector_stats.push(ConnectorIngestionStatus {
                         source: connector.source_name().to_owned(),
                         fetched_records: records.len(),
                         error: None,
@@ -90,7 +99,7 @@ impl IngestionService {
                     }
                 }
                 Err(error) => {
-                    connector_stats.push(ConnectorIngestionStats {
+                    connector_stats.push(ConnectorIngestionStatus {
                         source: connector.source_name().to_owned(),
                         fetched_records: 0,
                         error: Some(error.to_string()),
@@ -104,23 +113,46 @@ impl IngestionService {
             }
         }
 
+        if successful_connectors == 0 {
+            anyhow::bail!("no connectors succeeded; keeping previous dataset untouched");
+        }
+
+        if stitched.is_empty() {
+            anyhow::bail!("ingestion produced zero facilities; keeping previous dataset untouched");
+        }
+
+        if let Some(previous) = previous_status {
+            let minimum_safe_count = (previous.unique_facilities / 2).max(1);
+            if stitched.len() < minimum_safe_count {
+                anyhow::bail!(
+                    "ingestion result too small ({} < {}), keeping previous dataset untouched",
+                    stitched.len(),
+                    minimum_safe_count
+                );
+            }
+        }
+
         let facilities = stitched
             .into_values()
             .map(|record| self.normalize(record))
             .collect::<Vec<_>>();
+        let unique_facilities = facilities.len();
 
         self.repository
             .replace_all(facilities)
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
-        let snapshot = IngestionStats {
-            last_refresh_at: Some(Utc::now()),
-            unique_facilities: self.repository.list().await?.len(),
+        let snapshot = SystemIngestionStatus {
+            last_refresh_at: Utc::now(),
+            unique_facilities,
             connector_stats,
         };
 
-        *self.stats.write().await = snapshot.clone();
+        self.repository
+            .set_system_ingestion_status(snapshot.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
         info!(
             unique_facilities = snapshot.unique_facilities,
@@ -128,6 +160,33 @@ impl IngestionService {
         );
 
         Ok(())
+    }
+
+    async fn fetch_with_retry(
+        &self,
+        connector: &dyn HealthDataConnector,
+    ) -> anyhow::Result<Vec<SourceFacilityInput>> {
+        let mut attempt = 0usize;
+        loop {
+            attempt += 1;
+
+            match connector.fetch_facilities().await {
+                Ok(records) => return Ok(records),
+                Err(error) if attempt < CONNECTOR_MAX_ATTEMPTS => {
+                    let backoff_seconds = (attempt as u64) * 2;
+                    warn!(
+                        source = connector.source_name(),
+                        attempt,
+                        error = %error,
+                        "Connector fetch failed, retrying"
+                    );
+                    sleep(Duration::from_secs(backoff_seconds)).await;
+                }
+                Err(error) => {
+                    return Err(error);
+                }
+            }
+        }
     }
 
     fn normalize(&self, record: SourceFacilityInput) -> Facility {

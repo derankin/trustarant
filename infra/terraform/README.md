@@ -8,7 +8,9 @@ This setup uses a two-step Terraform flow:
    - a remote state bucket
 2. `environments/prod/` provisions runtime resources:
    - Cloud Run service for the Rust backend
+   - Cloud Run Job for daily ingestion refresh (`refresh_once` mode)
    - Cloud Run service for the Vue frontend (nginx static container)
+   - Secret Manager secret for `DATABASE_URL` (Neon/Postgres)
    - Artifact Registry repository
    - private static bucket (optional fallback)
 
@@ -31,7 +33,7 @@ Capture outputs:
 ```bash
 cd ../environments/prod
 cp terraform.tfvars.example terraform.tfvars
-# Update terraform.tfvars with bootstrap project_id + backend image.
+# Update terraform.tfvars with bootstrap project_id + backend/frontend images.
 # Recommended (2026): set `disable_backend_invoker_iam_check = true` to make Cloud Run public
 # without `allUsers` IAM binding. Or set explicit principals in `invoker_members`.
 # If your org policy blocks bucket public access, keep `allow_public_frontend_bucket = false`.
@@ -43,7 +45,21 @@ terraform init \
 terraform apply
 ```
 
-## 3) Build and push frontend image
+## 3) Add Neon DATABASE_URL secret value
+
+After first apply creates the secret container, add your Neon connection string as a secret version:
+
+```bash
+PROJECT_ID=<project_id>
+SECRET_ID=trustarant-database-url
+
+printf '%s' 'postgresql://...neon-url...' | \
+  gcloud secrets versions add "${SECRET_ID}" \
+    --project "${PROJECT_ID}" \
+    --data-file=-
+```
+
+## 4) Build and push frontend image
 
 ```bash
 cd ../../../frontend
@@ -55,7 +71,7 @@ docker build -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/frontend:lates
 docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/frontend:latest
 ```
 
-## 4) Build and push backend image
+## 5) Build and push backend image
 
 ```bash
 cd ../../../backend
@@ -69,3 +85,4 @@ docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/backend:latest
 ```
 
 Then rerun `terraform apply` in `environments/prod` with `backend_image` and `frontend_image` set.
+Cloud Scheduler will call the Cloud Run Job daily (default `0 9 * * *` UTC).

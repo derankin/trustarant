@@ -22,3 +22,13 @@ output "ingestion_scheduler_job" {
   value       = var.enable_ingestion_scheduler ? google_cloud_scheduler_job.ingestion_refresh[0].name : null
   description = "Cloud Scheduler job name that triggers ingestion refresh"
 }
+
+output "ingestion_cloud_run_job" {
+  value       = google_cloud_run_v2_job.ingestion.name
+  description = "Cloud Run Job that performs ingestion refreshes"
+}
+
+output "database_url_secret" {
+  value       = google_secret_manager_secret.database_url.secret_id
+  description = "Secret ID storing the PostgreSQL/Neon DATABASE_URL"
+}

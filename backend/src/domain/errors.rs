@@ -1,5 +1,13 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-#[error("Repository operation failed")]
-pub struct RepositoryError;
+pub enum RepositoryError {
+    #[error("{0}")]
+    Message(String),
+}
+
+impl RepositoryError {
+    pub fn message(message: impl Into<String>) -> Self {
+        Self::Message(message.into())
+    }
+}

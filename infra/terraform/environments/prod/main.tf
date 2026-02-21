@@ -5,6 +5,7 @@ locals {
     "cloudscheduler.googleapis.com",
     "iam.googleapis.com",
     "run.googleapis.com",
+    "secretmanager.googleapis.com",
     "storage.googleapis.com"
   ]
 
@@ -36,6 +37,50 @@ resource "google_service_account" "cloud_run_runtime" {
   display_name = "Trustarant Cloud Run runtime"
 
   depends_on = [google_project_service.required]
+}
+
+resource "google_service_account" "scheduler_invoker" {
+  project      = var.project_id
+  account_id   = "trustarant-scheduler"
+  display_name = "Trustarant Scheduler Invoker"
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_project_iam_member" "scheduler_run_developer" {
+  project = var.project_id
+  role    = "roles/run.developer"
+  member  = "serviceAccount:${google_service_account.scheduler_invoker.email}"
+}
+
+resource "google_service_account_iam_member" "scheduler_service_account_user" {
+  service_account_id = google_service_account.cloud_run_runtime.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.scheduler_invoker.email}"
+}
+
+resource "google_project_iam_member" "runtime_secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.cloud_run_runtime.email}"
+}
+
+resource "google_secret_manager_secret" "database_url" {
+  project   = var.project_id
+  secret_id = var.database_url_secret_id
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_secret_accessor_on_database_url" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.database_url.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud_run_runtime.email}"
 }
 
 resource "google_cloud_run_v2_service" "api" {
@@ -74,10 +119,72 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "TRUSTARANT_CORS_ORIGIN"
         value = "*"
       }
+
+      env {
+        name  = "TRUSTARANT_RUN_MODE"
+        value = "api"
+      }
+
+      env {
+        name  = "TRUSTARANT_ENABLE_BACKGROUND_INGESTION"
+        value = "false"
+      }
+
+      env {
+        name = "DATABASE_URL"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.database_url.secret_id
+            version = "latest"
+          }
+        }
+      }
     }
   }
 
-  depends_on = [google_project_service.required]
+  depends_on = [
+    google_project_service.required,
+    google_secret_manager_secret_iam_member.runtime_secret_accessor_on_database_url,
+  ]
+}
+
+resource "google_cloud_run_v2_job" "ingestion" {
+  project  = var.project_id
+  name     = "trustarant-ingestion"
+  location = var.region
+  deletion_protection = false
+
+  template {
+    template {
+      service_account = google_service_account.cloud_run_runtime.email
+      timeout         = "3600s"
+      max_retries     = 3
+
+      containers {
+        image = var.backend_image
+
+        env {
+          name  = "TRUSTARANT_RUN_MODE"
+          value = "refresh_once"
+        }
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_project_service.required,
+    google_secret_manager_secret_iam_member.runtime_secret_accessor_on_database_url,
+  ]
 }
 
 resource "google_cloud_run_v2_service" "frontend" {
@@ -154,13 +261,25 @@ resource "google_cloud_scheduler_job" "ingestion_refresh" {
 
   http_target {
     http_method = "POST"
-    uri         = "${google_cloud_run_v2_service.api.uri}/api/v1/system/refresh"
+    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.ingestion.name}:run"
 
     headers = {
       "Content-Type" = "application/json"
     }
 
     body = base64encode("{}")
+
+    oauth_token {
+      service_account_email = google_service_account.scheduler_invoker.email
+      scope                 = "https://www.googleapis.com/auth/cloud-platform"
+    }
+  }
+
+  retry_config {
+    retry_count          = 3
+    min_backoff_duration = "30s"
+    max_backoff_duration = "600s"
+    max_retry_duration   = "3600s"
   }
 
   depends_on = [google_project_service.required]

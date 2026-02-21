@@ -9,10 +9,21 @@ This backend is structured around clean architecture boundaries:
 
 ## Current Database Type
 
-The runtime repository is currently **in-memory** (`InMemoryFacilityRepository`).
-Data is repopulated by ingestion on startup and on the scheduler interval.
+The backend now supports:
 
-`postgres` and `redis` containers exist in `docker-compose.yml` for planned persistence/caching migration, but the current backend code path does not yet write to PostgreSQL.
+- **PostgreSQL (recommended/prod)** when `DATABASE_URL` is set
+- **In-memory fallback** when `DATABASE_URL` is missing
+
+For production, use a managed PostgreSQL URL (for example, Neon) injected through
+Secret Manager as `DATABASE_URL`.
+
+## Runtime Modes
+
+Set `TRUSTARANT_RUN_MODE` to control execution:
+
+- `api` (default): starts HTTP API only
+- `worker`: long-running ingestion loop (interval-based)
+- `refresh_once`: one-shot ingestion run, then process exits (ideal for Cloud Run Jobs)
 
 ## Run locally
 
@@ -108,6 +119,12 @@ From repository root:
 ```bash
 docker compose up --build
 ```
+
+Compose starts:
+
+- `backend` in `api` mode
+- `worker` in `worker` mode
+- `postgres` (local dev DB)
 
 ## Core endpoints
 

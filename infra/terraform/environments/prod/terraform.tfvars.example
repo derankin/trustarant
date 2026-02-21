@@ -7,4 +7,5 @@ invoker_members = []
 allow_public_frontend_bucket = false
 disable_frontend_invoker_iam_check = true
 enable_ingestion_scheduler = true
-ingestion_refresh_schedule = "0 */6 * * *"
+ingestion_refresh_schedule = "0 9 * * *"
+database_url_secret_id = "trustarant-database-url"

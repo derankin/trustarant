@@ -1,3 +1,5 @@
 mod in_memory_facility_repository;
+mod postgres_facility_repository;
 
 pub use in_memory_facility_repository::InMemoryFacilityRepository;
+pub use postgres_facility_repository::PostgresFacilityRepository;

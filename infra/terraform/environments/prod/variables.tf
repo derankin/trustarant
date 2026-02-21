@@ -60,5 +60,11 @@ variable "enable_ingestion_scheduler" {
 variable "ingestion_refresh_schedule" {
   description = "Cron schedule for ingestion refresh trigger (UTC)"
   type        = string
-  default     = "0 */6 * * *"
+  default     = "0 9 * * *"
+}
+
+variable "database_url_secret_id" {
+  description = "Secret Manager secret ID containing DATABASE_URL (Neon/Postgres connection string)"
+  type        = string
+  default     = "trustarant-database-url"
 }

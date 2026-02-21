@@ -36,6 +36,19 @@ impl Jurisdiction {
             Self::Pasadena => "Pasadena",
         }
     }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "lac" => Some(Self::LosAngelesCounty),
+            "sdc" => Some(Self::SanDiegoCounty),
+            "lb" => Some(Self::LongBeach),
+            "riv" => Some(Self::RiversideCounty),
+            "sbc" => Some(Self::SanBernardinoCounty),
+            "oc" => Some(Self::OrangeCounty),
+            "pas" => Some(Self::Pasadena),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -71,4 +84,18 @@ pub struct Facility {
     pub trust_score: u8,
     pub inspections: Vec<Inspection>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ConnectorIngestionStatus {
+    pub source: String,
+    pub fetched_records: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SystemIngestionStatus {
+    pub last_refresh_at: DateTime<Utc>,
+    pub unique_facilities: usize,
+    pub connector_stats: Vec<ConnectorIngestionStatus>,
 }

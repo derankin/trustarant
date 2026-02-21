@@ -8,22 +8,25 @@ use std::{net::SocketAddr, sync::Arc};
 
 use application::services::{DirectoryService, IngestionService, TrustScoreService};
 use axum::Router;
-use config::Settings;
+use config::{RunMode, Settings};
+use domain::repositories::FacilityRepository;
 use infrastructure::{
-    connectors::default_connectors, repositories::InMemoryFacilityRepository, scheduler,
+    connectors::default_connectors,
+    repositories::{InMemoryFacilityRepository, PostgresFacilityRepository},
+    scheduler,
 };
 use presentation::http::{AppState, routes::build_router};
 use tokio::net::TcpListener;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
 
     let settings = Settings::from_env();
+    let repository = build_repository(&settings).await?;
 
-    let repository = Arc::new(InMemoryFacilityRepository::new());
     let trust_score_service = Arc::new(TrustScoreService::default());
     let ingestion_service = Arc::new(IngestionService::new(
         repository.clone(),
@@ -31,24 +34,44 @@ async fn main() -> anyhow::Result<()> {
         default_connectors(),
     ));
 
-    let initial_ingestion_service = ingestion_service.clone();
-    tokio::spawn(async move {
-        if let Err(err) = initial_ingestion_service.refresh().await {
-            error!(error = %err, "Initial ingestion failed; API will still start");
+    if settings.run_mode == RunMode::RefreshOnce {
+        info!("Running one-shot ingestion refresh");
+        ingestion_service.refresh().await?;
+        info!("One-shot ingestion refresh completed");
+        return Ok(());
+    }
+
+    if settings.run_mode == RunMode::Worker {
+        info!("Running ingestion worker mode");
+        if let Err(error) = ingestion_service.refresh().await {
+            error!(%error, "Initial worker refresh failed");
         } else {
-            info!("Initial ingestion completed");
+            info!("Initial worker refresh completed");
         }
-    });
+        scheduler::run(ingestion_service, settings.ingestion_interval_hours).await;
+        return Ok(());
+    }
+
+    if settings.enable_background_ingestion {
+        let initial_ingestion_service = ingestion_service.clone();
+        tokio::spawn(async move {
+            if let Err(err) = initial_ingestion_service.refresh().await {
+                error!(error = %err, "Initial ingestion failed; API will still start");
+            } else {
+                info!("Initial ingestion completed");
+            }
+        });
+
+        tokio::spawn(scheduler::run(
+            ingestion_service.clone(),
+            settings.ingestion_interval_hours,
+        ));
+    }
 
     let app_state = AppState {
         directory_service: Arc::new(DirectoryService::new(repository)),
         ingestion_service: ingestion_service.clone(),
     };
-
-    tokio::spawn(scheduler::run(
-        ingestion_service,
-        settings.ingestion_interval_hours,
-    ));
 
     let app = app_router(app_state, &settings);
     let addr: SocketAddr = format!("{}:{}", settings.host, settings.port).parse()?;
@@ -101,4 +124,17 @@ async fn shutdown_signal() {
     }
 
     info!("Shutdown signal received");
+}
+
+async fn build_repository(settings: &Settings) -> anyhow::Result<Arc<dyn FacilityRepository>> {
+    if let Some(database_url) = settings.database_url.as_deref() {
+        let repository = PostgresFacilityRepository::connect(database_url)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        info!("Using PostgreSQL facility repository");
+        return Ok(Arc::new(repository));
+    }
+
+    warn!("DATABASE_URL not set, falling back to in-memory repository");
+    Ok(Arc::new(InMemoryFacilityRepository::new()))
 }

@@ -29,6 +29,8 @@ services:
       dockerfile: Dockerfile
     container_name: trustarant-backend
     environment:
+      TRUSTARANT_RUN_MODE: api
+      TRUSTARANT_ENABLE_BACKGROUND_INGESTION: "false"
       TRUSTARANT_HOST: 0.0.0.0
       TRUSTARANT_PORT: 8080
       TRUSTARANT_CORS_ORIGIN: http://localhost:15173
@@ -57,10 +59,50 @@ services:
       TRUSTARANT_OC_CPRA_EXPORT_URL: ${TRUSTARANT_OC_CPRA_EXPORT_URL:-}
       TRUSTARANT_PASADENA_CPRA_EXPORT_URL: ${TRUSTARANT_PASADENA_CPRA_EXPORT_URL:-}
       TRUSTARANT_CPRA_TIMEOUT_SECS: ${TRUSTARANT_CPRA_TIMEOUT_SECS:-20}
-      DATABASE_URL: postgres://trustarant:trustarant@postgres:5432/trustarant
+      DATABASE_URL: ${DATABASE_URL:-postgres://trustarant:trustarant@postgres:5432/trustarant}
       REDIS_URL: redis://redis:6379
     ports:
       - "18080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trustarant-worker
+    environment:
+      TRUSTARANT_RUN_MODE: worker
+      TRUSTARANT_INGESTION_INTERVAL_HOURS: 24
+      TRUSTARANT_SD_SOCRATA_BASE_URL: ${TRUSTARANT_SD_SOCRATA_BASE_URL:-https://internal-sandiegocounty.data.socrata.com}
+      TRUSTARANT_SD_SOCRATA_DATASET_ID: ${TRUSTARANT_SD_SOCRATA_DATASET_ID:-c5ez-ufrd}
+      TRUSTARANT_SD_SOCRATA_PAGE_SIZE: ${TRUSTARANT_SD_SOCRATA_PAGE_SIZE:-5000}
+      TRUSTARANT_SD_SOCRATA_MAX_RECORDS: ${TRUSTARANT_SD_SOCRATA_MAX_RECORDS:-}
+      TRUSTARANT_SD_SOCRATA_ACTIVE_ONLY: ${TRUSTARANT_SD_SOCRATA_ACTIVE_ONLY:-true}
+      TRUSTARANT_SD_SOCRATA_TIMEOUT_SECS: ${TRUSTARANT_SD_SOCRATA_TIMEOUT_SECS:-20}
+      TRUSTARANT_SD_SOCRATA_APP_TOKEN: ${TRUSTARANT_SD_SOCRATA_APP_TOKEN:-}
+      TRUSTARANT_LA_INVENTORY_URL: ${TRUSTARANT_LA_INVENTORY_URL:-https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Environmental_Health_Restaurant_and_Market_Inventory_12312025/FeatureServer}
+      TRUSTARANT_LA_INSPECTIONS_URL: ${TRUSTARANT_LA_INSPECTIONS_URL:-https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Environmental_Health_Restaurant_and_Market_Inspections_01012023_to_123120025/FeatureServer}
+      TRUSTARANT_LA_VIOLATIONS_URL: ${TRUSTARANT_LA_VIOLATIONS_URL:-https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Environmental_Health_Restaurant_and_Market_Violations_01012023_to_123120025/FeatureServer}
+      TRUSTARANT_LA_PAGE_SIZE: ${TRUSTARANT_LA_PAGE_SIZE:-2000}
+      TRUSTARANT_LA_MAX_RECORDS: ${TRUSTARANT_LA_MAX_RECORDS:-}
+      TRUSTARANT_LA_TIMEOUT_SECS: ${TRUSTARANT_LA_TIMEOUT_SECS:-20}
+      TRUSTARANT_LONG_BEACH_CLOSURES_URL: ${TRUSTARANT_LONG_BEACH_CLOSURES_URL:-https://www.longbeach.gov/health/inspections-and-reporting/inspections/restaurant-closures/}
+      TRUSTARANT_LONG_BEACH_LIMIT: ${TRUSTARANT_LONG_BEACH_LIMIT:-200}
+      TRUSTARANT_LONG_BEACH_TIMEOUT_SECS: ${TRUSTARANT_LONG_BEACH_TIMEOUT_SECS:-20}
+      TRUSTARANT_SBC_ARCGIS_URL: ${TRUSTARANT_SBC_ARCGIS_URL:-https://services.arcgis.com/OUDgwkiMsqiL8Tvp/arcgis/rest/services/San_Bernardio_Co_Food_Grades/FeatureServer}
+      TRUSTARANT_RIVERSIDE_ARCGIS_URL: ${TRUSTARANT_RIVERSIDE_ARCGIS_URL:-}
+      TRUSTARANT_LIVES_PAGE_SIZE: ${TRUSTARANT_LIVES_PAGE_SIZE:-1000}
+      TRUSTARANT_LIVES_MAX_RECORDS: ${TRUSTARANT_LIVES_MAX_RECORDS:-}
+      TRUSTARANT_LIVES_TIMEOUT_SECS: ${TRUSTARANT_LIVES_TIMEOUT_SECS:-20}
+      TRUSTARANT_OC_CPRA_EXPORT_URL: ${TRUSTARANT_OC_CPRA_EXPORT_URL:-}
+      TRUSTARANT_PASADENA_CPRA_EXPORT_URL: ${TRUSTARANT_PASADENA_CPRA_EXPORT_URL:-}
+      TRUSTARANT_CPRA_TIMEOUT_SECS: ${TRUSTARANT_CPRA_TIMEOUT_SECS:-20}
+      DATABASE_URL: ${DATABASE_URL:-postgres://trustarant:trustarant@postgres:5432/trustarant}
+      REDIS_URL: redis://redis:6379
     depends_on:
       postgres:
         condition: service_healthy
