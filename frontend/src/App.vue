@@ -699,7 +699,7 @@ onMounted(async () => {
       </cv-tile>
     </section>
 
-    <section class="trust-panel">
+    <section id="data-sources" class="trust-panel">
       <header class="trust-section-head">
         <h2 class="trust-heading">Filter Results</h2>
         <cv-tag :label="`${totalMatches.toLocaleString()} result(s)`" kind="cool-gray" />
@@ -893,4 +893,29 @@ onMounted(async () => {
       </cv-structured-list>
     </section>
   </main>
+
+  <footer class="trust-footer">
+    <div class="trust-footer__inner">
+      <div>
+        <p class="trust-footer__brand">CleanPlated</p>
+        <p class="trust-footer__copy">
+          Southern California inspection data, normalized into one reliable Trust Score.
+        </p>
+      </div>
+      <div class="trust-footer__meta">
+        <p>Latest ingestion: {{ lastRefreshLabel }}</p>
+        <p class="trust-footer__credit">
+          Built with
+          <img src="/omega-purple.svg" alt="Cipher Labs logo" class="trust-footer__logo" loading="lazy" />
+          by
+          <a href="https://thecipherlabs.com" target="_blank" rel="noopener noreferrer">Cipher Labs</a>
+          &copy; {{ new Date().getFullYear() }} CleanPlated
+        </p>
+      </div>
+      <nav class="trust-footer__links" aria-label="Footer links">
+        <a href="#data-sources">Data sources</a>
+        <a href="https://thecipherlabs.com" target="_blank" rel="noopener noreferrer">Cipher Labs</a>
+      </nav>
+    </div>
+  </footer>
 </template>

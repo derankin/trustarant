@@ -49,6 +49,7 @@ backend/target/
 
 # Local media/debug artifacts
 *.png
+!frontend/public/*.png
 
 # Terraform local state/cache
 **/.terraform/
