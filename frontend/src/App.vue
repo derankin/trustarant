@@ -779,6 +779,7 @@ onMounted(async () => {
             <cv-button
               size="sm"
               kind="ghost"
+              :aria-label="`Like ${facility.name}`"
               :disabled="isVoting(facility.id)"
               @click="submitVote(facility.id, 'like')"
             >
@@ -788,6 +789,7 @@ onMounted(async () => {
             <cv-button
               size="sm"
               kind="ghost"
+              :aria-label="`Dislike ${facility.name}`"
               :disabled="isVoting(facility.id)"
               @click="submitVote(facility.id, 'dislike')"
             >
@@ -838,6 +840,28 @@ onMounted(async () => {
           </div>
           <div class="trust-card__actions">
             <cv-tag :label="`${facility.trust_score}`" kind="green" />
+            <div class="trust-card__vote-actions">
+              <cv-button
+                size="sm"
+                kind="ghost"
+                :aria-label="`Like ${facility.name}`"
+                :disabled="isVoting(facility.id)"
+                @click="submitVote(facility.id, 'like')"
+              >
+                <ThumbsUp16 />
+                <span class="trust-vote-count">{{ facility.likes ?? 0 }}</span>
+              </cv-button>
+              <cv-button
+                size="sm"
+                kind="ghost"
+                :aria-label="`Dislike ${facility.name}`"
+                :disabled="isVoting(facility.id)"
+                @click="submitVote(facility.id, 'dislike')"
+              >
+                <ThumbsDown16 />
+                <span class="trust-vote-count">{{ facility.dislikes ?? 0 }}</span>
+              </cv-button>
+            </div>
           </div>
         </li>
       </ul>

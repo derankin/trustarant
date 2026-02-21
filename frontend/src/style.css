@@ -192,6 +192,16 @@ body {
   gap: 0.5rem;
 }
 
+.trust-card__vote-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.trust-card__vote-actions .bx--btn {
+  min-height: 2rem;
+  padding-inline: 0.6rem;
+}
+
 .trust-topten {
   margin: 0.75rem 0 0;
   padding: 0;
