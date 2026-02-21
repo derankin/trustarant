@@ -1,0 +1,57 @@
+# Cloud Build upload filters for this repo.
+# Keep source upload small and avoid local agent/workstation artifacts.
+
+# Include gitignore rules by default.
+#!include:.gitignore
+
+.git
+.gitignore
+.gcloudignore
+
+# Local workspace and AI tool artifacts
+.adal/
+.agent/
+.agents/
+.augment/
+.claude/
+.cline/
+.codebuddy/
+.commandcode/
+.continue/
+.cortex/
+.crush/
+.factory/
+.goose/
+.iflow/
+.junie/
+.kilocode/
+.kiro/
+.kode/
+.mcpjam/
+.mux/
+.neovate/
+.openhands/
+.pi/
+.playwright-mcp/
+.pochi/
+.qoder/
+.qwen/
+.roo/
+.trae/
+.vibe/
+.windsurf/
+.zencoder/
+
+# Build/output directories
+frontend/node_modules/
+frontend/dist/
+backend/target/
+
+# Local media/debug artifacts
+*.png
+
+# Terraform local state/cache
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/.terraform.lock.hcl
