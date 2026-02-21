@@ -9,8 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@carbon/icons-vue": "^10.124.0",
     "@carbon/styles": "^1.100.0",
+    "@carbon/vue": "^3.0.30",
     "@tailwindcss/vite": "^4.2.0",
+    "carbon-components": "^10.59.2",
     "tailwindcss": "^4.2.0",
     "vue": "^3.5.25"
   },

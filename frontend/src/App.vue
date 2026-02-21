@@ -30,6 +30,7 @@ type IngestionStats = {
 type SortMode = 'trust_desc' | 'recent_desc' | 'name_asc'
 type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
 type LocationState = 'default' | 'requesting' | 'granted' | 'denied' | 'unsupported'
+type PaginationChange = { start: number; page: number; length: number }
 
 const fallbackLatitude = 34.0522
 const fallbackLongitude = -118.2437
@@ -53,6 +54,7 @@ const locationMessage = ref('Using Southern California default center (Downtown 
 
 const currentPage = ref(1)
 const pageSize = ref(12)
+const pageSizeChoices = [12, 24, 48]
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
 
@@ -151,27 +153,17 @@ const paginatedFacilities = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return filteredFacilities.value.slice(start, start + pageSize.value)
 })
-const pageWindow = computed(() => {
-  const pages: number[] = []
-  const maxVisible = 5
-  const half = Math.floor(maxVisible / 2)
-  let start = Math.max(1, currentPage.value - half)
-  let end = Math.min(totalPages.value, start + maxVisible - 1)
-
-  if (end - start + 1 < maxVisible) {
-    start = Math.max(1, end - maxVisible + 1)
-  }
-
-  for (let page = start; page <= end; page += 1) {
-    pages.push(page)
-  }
-  return pages
-})
 const pageStart = computed(() => {
   if (filteredFacilities.value.length === 0) return 0
   return (currentPage.value - 1) * pageSize.value + 1
 })
 const pageEnd = computed(() => Math.min(currentPage.value * pageSize.value, filteredFacilities.value.length))
+const paginationPageSizes = computed(() =>
+  pageSizeChoices.map((value) => ({
+    value,
+    selected: value === pageSize.value,
+  })),
+)
 
 watch(
   filteredFacilities,
@@ -242,8 +234,17 @@ const distanceLabel = (facility: FacilitySummary) => {
   return `${miles.toFixed(1)} mi`
 }
 
-const goToPage = (page: number) => {
-  currentPage.value = Math.min(totalPages.value, Math.max(1, page))
+const onPaginationChange = ({ page, length }: PaginationChange) => {
+  currentPage.value = Math.max(1, page)
+  pageSize.value = length
+}
+
+const onRadiusChange = (rawValue: string | number) => {
+  const parsed = typeof rawValue === 'string' ? Number.parseFloat(rawValue) : rawValue
+  if (Number.isFinite(parsed)) {
+    radiusMiles.value = parsed
+  }
+  void fetchFacilities()
 }
 
 async function fetchFacilities() {
@@ -329,212 +330,199 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="trust-shell">
-    <section class="panel panel--hero">
-      <p class="eyebrow">Trustaraunt</p>
-      <h1>Find safer food, faster.</h1>
-      <p class="lede">Southern California food safety data, normalized into one reliable Trust Score.</p>
+  <main class="trust-app">
+    <section class="trust-panel trust-panel--hero">
+      <p class="trust-eyebrow">Trustaraunt</p>
+      <h1 class="trust-title">Find safer food, faster.</h1>
+      <p class="trust-lede">Southern California food safety data, normalized into one reliable Trust Score.</p>
 
-      <form class="search-row" @submit.prevent="fetchFacilities">
-        <label class="field-label" for="query">Search Directory</label>
-        <div class="search-controls">
-          <input
-            id="query"
-            v-model="search"
-            class="text-input"
-            type="text"
-            placeholder="Search by business, address, ZIP, or city"
-          />
-          <button class="btn btn--primary" type="submit">Search</button>
+      <form class="trust-form" @submit.prevent="fetchFacilities">
+        <cv-search
+          v-model="search"
+          label="Search Directory"
+          placeholder="Search by business, address, ZIP, or city"
+          size="lg"
+        />
+
+        <div class="trust-actions">
+          <cv-button kind="primary" type="submit">Search</cv-button>
+          <cv-button
+            kind="secondary"
+            type="button"
+            :disabled="locationState === 'requesting'"
+            @click="requestBrowserLocation"
+          >
+            {{ locationState === 'requesting' ? 'Locating…' : 'Use Browser Location' }}
+          </cv-button>
         </div>
       </form>
 
-      <div class="action-row">
-        <button
-          class="btn btn--secondary"
-          type="button"
-          :disabled="locationState === 'requesting'"
-          @click="requestBrowserLocation"
-        >
-          {{ locationState === 'requesting' ? 'Locating…' : 'Use Browser Location' }}
-        </button>
-      </div>
-
-      <p class="note">{{ locationMessage }}</p>
-
-      <div class="range-wrap">
-        <label class="field-label" for="radius">Radius ({{ radiusMiles.toFixed(1) }} mi)</label>
-        <input
-          id="radius"
-          v-model.number="radiusMiles"
-          class="range-input"
-          type="range"
-          min="0.5"
-          max="15"
-          step="0.5"
-          @change="fetchFacilities"
-        />
-      </div>
-      <p class="note">
+      <p class="trust-note">{{ locationMessage }}</p>
+      <p class="trust-note">
         {{ hasKeywordQuery ? 'Keyword mode active (radius ignored).' : `Centering near ${activeCenter.label}.` }}
       </p>
+
+      <cv-slider
+        label="Search Radius"
+        :model-value="String(radiusMiles)"
+        min="0.5"
+        max="15"
+        step="0.5"
+        :min-label="'0.5 mi'"
+        :max-label="'15 mi'"
+        @change="onRadiusChange"
+      />
     </section>
 
-    <section class="stats-grid">
-      <article class="panel">
-        <p class="stat-label">Facilities Loaded</p>
-        <p class="stat-value">{{ ingestionStats?.unique_facilities?.toLocaleString() ?? '0' }}</p>
-        <p class="note">Latest ingestion snapshot.</p>
+    <section class="trust-stats">
+      <article class="trust-panel">
+        <p class="trust-kicker">Facilities Loaded</p>
+        <p class="trust-stat">{{ ingestionStats?.unique_facilities?.toLocaleString() ?? '0' }}</p>
+        <p class="trust-note">Latest ingestion snapshot.</p>
       </article>
 
-      <article class="panel">
-        <p class="stat-label">Last Ingestion</p>
-        <p class="stat-date">{{ lastRefreshLabel }}</p>
-        <p class="note">Search center: {{ activeCenter.label }} · Radius: {{ radiusMiles.toFixed(1) }} mi</p>
+      <article class="trust-panel">
+        <p class="trust-kicker">Last Ingestion</p>
+        <p class="trust-stat trust-stat--small">{{ lastRefreshLabel }}</p>
+        <p class="trust-note">Search center: {{ activeCenter.label }} · Radius: {{ radiusMiles.toFixed(1) }} mi</p>
       </article>
     </section>
 
-    <section class="panel">
-      <header class="section-head">
-        <h2>Slice The Data</h2>
-        <span class="badge badge--muted">{{ filteredFacilities.length }} result(s)</span>
+    <section class="trust-panel">
+      <header class="trust-section-head">
+        <h2 class="trust-heading">Slice the data</h2>
+        <cv-tag :label="`${filteredFacilities.length} result(s)`" kind="cool-gray" />
       </header>
 
-      <div class="filter-grid">
-        <div>
-          <label class="field-label" for="jurisdiction">Jurisdiction</label>
-          <select id="jurisdiction" v-model="jurisdictionFilter" class="select-input">
-            <option v-for="option in jurisdictionOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </div>
+      <div class="trust-filters">
+        <cv-select v-model="jurisdictionFilter" label="Jurisdiction">
+          <cv-select-option v-for="option in jurisdictionOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </cv-select-option>
+        </cv-select>
 
-        <div>
-          <label class="field-label" for="sort">Sort</label>
-          <select id="sort" v-model="sortMode" class="select-input">
-            <option value="trust_desc">Trust Score (High to Low)</option>
-            <option value="recent_desc">Most Recently Inspected</option>
-            <option value="name_asc">Name (A to Z)</option>
-          </select>
-        </div>
+        <cv-select v-model="sortMode" label="Sort">
+          <cv-select-option value="trust_desc">Trust Score (High to Low)</cv-select-option>
+          <cv-select-option value="recent_desc">Most Recently Inspected</cv-select-option>
+          <cv-select-option value="name_asc">Name (A to Z)</cv-select-option>
+        </cv-select>
       </div>
 
-      <div class="slice-grid">
-        <button class="slice-btn" :class="{ 'slice-btn--active': scoreSlice === 'all' }" type="button" @click="scoreSlice = 'all'">
-          <span>All</span>
-          <span class="badge badge--muted">{{ facilities.length }}</span>
-        </button>
-        <button class="slice-btn" :class="{ 'slice-btn--active': scoreSlice === 'elite' }" type="button" @click="scoreSlice = 'elite'">
-          <span>Elite</span>
-          <span class="badge badge--elite">{{ scoreSlices.elite }}</span>
-        </button>
-        <button class="slice-btn" :class="{ 'slice-btn--active': scoreSlice === 'solid' }" type="button" @click="scoreSlice = 'solid'">
-          <span>Solid</span>
-          <span class="badge badge--solid">{{ scoreSlices.solid }}</span>
-        </button>
-        <button class="slice-btn" :class="{ 'slice-btn--active': scoreSlice === 'watch' }" type="button" @click="scoreSlice = 'watch'">
-          <span>Watch</span>
-          <span class="badge badge--watch">{{ scoreSlices.watch }}</span>
-        </button>
+      <div class="trust-slices">
+        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'all' }" @click="scoreSlice = 'all'">
+          All · {{ facilities.length }}
+        </cv-button>
+        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'elite' }" @click="scoreSlice = 'elite'">
+          Elite · {{ scoreSlices.elite }}
+        </cv-button>
+        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'solid' }" @click="scoreSlice = 'solid'">
+          Solid · {{ scoreSlices.solid }}
+        </cv-button>
+        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'watch' }" @click="scoreSlice = 'watch'">
+          Watch · {{ scoreSlices.watch }}
+        </cv-button>
       </div>
 
-      <label class="checkbox-row" for="recent-only">
-        <input id="recent-only" v-model="recentOnly" class="checkbox-input" type="checkbox" />
-        <span>Only show inspections from the last 90 days</span>
-      </label>
+      <cv-checkbox
+        v-model="recentOnly"
+        value="recent-only"
+        label="Only show inspections from the last 90 days"
+      />
     </section>
 
-    <section v-if="featured" class="panel">
-      <p class="stat-label">Top Match In Current Slice</p>
-      <h3>{{ featured.name }}</h3>
-      <p class="card-address">{{ featured.address }}, {{ featured.city }} {{ featured.postal_code }}</p>
-      <div class="chip-row">
-        <span class="badge badge--muted">{{ featured.jurisdiction }}</span>
-        <span class="badge" :class="scoreBandMeta(featured.trust_score).className">
-          {{ scoreBandMeta(featured.trust_score).label }} · {{ featured.trust_score }}
-        </span>
-        <span v-if="distanceLabel(featured)" class="badge badge--muted">{{ distanceLabel(featured) }}</span>
+    <section v-if="featured" class="trust-panel">
+      <p class="trust-kicker">Top Match In Current Slice</p>
+      <h3 class="trust-subheading">{{ featured.name }}</h3>
+      <p class="trust-address">{{ featured.address }}, {{ featured.city }} {{ featured.postal_code }}</p>
+      <div class="trust-tags">
+        <cv-tag :label="featured.jurisdiction" kind="cool-gray" />
+        <cv-tag :label="`${scoreBandMeta(featured.trust_score).label} · ${featured.trust_score}`" kind="green" />
+        <cv-tag v-if="distanceLabel(featured)" :label="distanceLabel(featured) ?? ''" kind="teal" />
       </div>
-      <p class="note">Last inspection: {{ formatDate(featured.latest_inspection_at) }}</p>
+      <p class="trust-note">Last inspection: {{ formatDate(featured.latest_inspection_at) }}</p>
     </section>
 
-    <section class="panel">
-      <header class="section-head">
-        <h2>Directory</h2>
-        <span class="badge badge--muted">{{ filteredFacilities.length }} result(s)</span>
+    <section class="trust-panel">
+      <header class="trust-section-head">
+        <h2 class="trust-heading">Directory</h2>
+        <cv-tag :label="`${filteredFacilities.length} result(s)`" kind="cool-gray" />
       </header>
 
-      <p class="note" v-if="filteredFacilities.length > 0">
+      <p v-if="filteredFacilities.length > 0" class="trust-note">
         Showing {{ pageStart }}–{{ pageEnd }} of {{ filteredFacilities.length }}
       </p>
 
-      <p v-if="loading" class="status-text">Loading latest trust scores…</p>
-      <p v-else-if="error" class="status-text status-text--error">{{ error }}</p>
-      <p v-else-if="filteredFacilities.length === 0" class="status-text">
-        No facilities matched this slice. Try a wider radius or fewer filters.
-      </p>
+      <cv-inline-loading v-if="loading" state="loading" loading-text="Loading latest trust scores..." />
+      <cv-inline-notification
+        v-else-if="error"
+        kind="error"
+        title="Directory request failed"
+        :sub-title="error"
+        :hide-close-button="true"
+      />
+      <cv-inline-notification
+        v-else-if="filteredFacilities.length === 0"
+        kind="info"
+        title="No matching facilities"
+        sub-title="Try a wider radius or fewer filters."
+        :hide-close-button="true"
+      />
 
-      <ul v-else class="directory-list">
-        <li v-for="facility in paginatedFacilities" :key="facility.id" class="directory-item">
-          <div class="directory-main">
-            <p class="directory-title">{{ facility.name }}</p>
-            <p class="card-address">{{ facility.address }}, {{ facility.city }} {{ facility.postal_code }}</p>
-            <div class="chip-row">
-              <span class="badge badge--muted">{{ facility.jurisdiction }}</span>
-              <span v-if="distanceLabel(facility)" class="badge badge--muted">{{ distanceLabel(facility) }}</span>
+      <ul v-else class="trust-directory">
+        <li v-for="facility in paginatedFacilities" :key="facility.id" class="trust-card">
+          <div class="trust-card__main">
+            <p class="trust-card__title">{{ facility.name }}</p>
+            <p class="trust-address">{{ facility.address }}, {{ facility.city }} {{ facility.postal_code }}</p>
+            <div class="trust-tags">
+              <cv-tag :label="facility.jurisdiction" kind="cool-gray" />
+              <cv-tag v-if="distanceLabel(facility)" :label="distanceLabel(facility) ?? ''" kind="teal" />
             </div>
-            <p class="note">Inspected {{ formatDate(facility.latest_inspection_at) }}</p>
+            <p class="trust-note">Inspected {{ formatDate(facility.latest_inspection_at) }}</p>
           </div>
-          <span class="badge score-pill" :class="scoreBandMeta(facility.trust_score).className">
-            {{ facility.trust_score }}
-          </span>
+          <cv-tag :label="`${facility.trust_score}`" kind="green" />
         </li>
       </ul>
 
-      <div v-if="filteredFacilities.length > pageSize" class="pagination">
-        <button class="btn btn--secondary" type="button" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">
-          Previous
-        </button>
-        <div class="page-buttons">
-          <button
-            v-for="page in pageWindow"
-            :key="page"
-            class="page-btn"
-            :class="{ 'page-btn--active': page === currentPage }"
-            type="button"
-            @click="goToPage(page)"
-          >
-            {{ page }}
-          </button>
-        </div>
-        <button class="btn btn--secondary" type="button" :disabled="currentPage === totalPages" @click="goToPage(currentPage + 1)">
-          Next
-        </button>
+      <div v-if="filteredFacilities.length > 0" class="trust-pagination">
+        <cv-pagination
+          :number-of-items="filteredFacilities.length"
+          :actual-items-on-page="paginatedFacilities.length"
+          :page="currentPage"
+          :page-sizes="paginationPageSizes"
+          @change="onPaginationChange"
+        />
       </div>
     </section>
 
-    <section class="panel">
-      <header class="section-head">
-        <h2>Data Provenance</h2>
+    <section class="trust-panel">
+      <header class="trust-section-head">
+        <h2 class="trust-heading">Data provenance</h2>
       </header>
-      <p class="note">
-        Trustaraunt aggregates LA County Open Data, San Diego Socrata, Long Beach public feeds, and Orange/Pasadena public-record or portal data, plus Riverside/San Bernardino LIVES.
+      <p class="trust-note">
+        Trustaraunt aggregates LA County Open Data, San Diego Socrata, Long Beach public feeds,
+        and Orange/Pasadena public-record or portal data, plus Riverside/San Bernardino LIVES.
       </p>
-      <ul class="provenance-list">
-        <li v-for="connector in connectorRows" :key="connector.source" class="provenance-row">
-          <div>
-            <p class="directory-title">{{ formatSourceName(connector.source) }}</p>
-            <p class="note">
-              {{ connector.error ? 'Unavailable in latest ingestion run' : `${connector.fetched_records.toLocaleString()} records fetched` }}
+      <ul class="trust-provenance">
+        <li v-for="connector in connectorRows" :key="connector.source" class="trust-card trust-card--provenance">
+          <div class="trust-card__main">
+            <p class="trust-card__title">{{ formatSourceName(connector.source) }}</p>
+            <p class="trust-note">
+              {{
+                connector.error
+                  ? 'Unavailable in latest ingestion run'
+                  : `${connector.fetched_records.toLocaleString()} records fetched`
+              }}
             </p>
-            <p v-if="connector.error" class="status-text status-text--error">
-              {{ summarizeConnectorError(connector.error) }}
-            </p>
+            <cv-inline-notification
+              v-if="connector.error"
+              kind="warning"
+              title="Connector warning"
+              :sub-title="summarizeConnectorError(connector.error) ?? ''"
+              :hide-close-button="true"
+              :low-contrast="true"
+            />
           </div>
-          <span class="badge" :class="connector.error ? 'badge--watch' : 'badge--elite'">
-            {{ connector.error ? 'Error' : 'Healthy' }}
-          </span>
+          <cv-tag :label="connector.error ? 'Error' : 'Healthy'" :kind="connector.error ? 'red' : 'green'" />
         </li>
       </ul>
     </section>
