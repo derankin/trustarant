@@ -2,7 +2,7 @@ substitutions:
   _REGION: us-west1
   _AR_REPO: trustarant
   _SERVICE: trustarant-web
-  _BACKEND_URL: https://trustarant-api-3y7woju2vq-uw.a.run.app
+  _BACKEND_URL: https://trustarant-api-702422253553.us-west1.run.app
 
 steps:
   - name: gcr.io/cloud-builders/docker
