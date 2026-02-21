@@ -1,4 +1,4 @@
-# Trustaraunt Frontend (Vue 3 + IBM Carbon)
+# Cleanplated Frontend (Vue 3 + IBM Carbon)
 
 ## Local development
 

@@ -158,12 +158,7 @@ const pageStart = computed(() => {
   return (currentPage.value - 1) * pageSize.value + 1
 })
 const pageEnd = computed(() => Math.min(currentPage.value * pageSize.value, filteredFacilities.value.length))
-const paginationPageSizes = computed(() =>
-  pageSizeChoices.map((value) => ({
-    value,
-    selected: value === pageSize.value,
-  })),
-)
+const paginationPageSizes = computed(() => pageSizeChoices)
 
 watch(
   filteredFacilities,
@@ -332,17 +327,21 @@ onMounted(async () => {
 <template>
   <main class="trust-app">
     <section class="trust-panel trust-panel--hero">
-      <p class="trust-eyebrow">Trustaraunt</p>
+      <p class="trust-eyebrow">Cleanplated</p>
       <h1 class="trust-title">Find safer food, faster.</h1>
       <p class="trust-lede">Southern California food safety data, normalized into one reliable Trust Score.</p>
 
       <form class="trust-form" @submit.prevent="fetchFacilities">
-        <cv-search
+        <cv-text-input
           v-model="search"
           label="Search Directory"
           placeholder="Search by business, address, ZIP, or city"
           size="lg"
-        />
+        >
+          <template v-slot:helper-text>
+            Search by business name, address, ZIP code, or city
+          </template>
+        </cv-text-input>
 
         <div class="trust-actions">
           <cv-button kind="primary" type="submit">Search</cv-button>
@@ -375,17 +374,17 @@ onMounted(async () => {
     </section>
 
     <section class="trust-stats">
-      <article class="trust-panel">
+      <cv-tile class="trust-stat-tile">
         <p class="trust-kicker">Facilities Loaded</p>
         <p class="trust-stat">{{ ingestionStats?.unique_facilities?.toLocaleString() ?? '0' }}</p>
         <p class="trust-note">Latest ingestion snapshot.</p>
-      </article>
+      </cv-tile>
 
-      <article class="trust-panel">
+      <cv-tile class="trust-stat-tile">
         <p class="trust-kicker">Last Ingestion</p>
         <p class="trust-stat trust-stat--small">{{ lastRefreshLabel }}</p>
         <p class="trust-note">Search center: {{ activeCenter.label }} · Radius: {{ radiusMiles.toFixed(1) }} mi</p>
-      </article>
+      </cv-tile>
     </section>
 
     <section class="trust-panel">
@@ -409,17 +408,33 @@ onMounted(async () => {
       </div>
 
       <div class="trust-slices">
-        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'all' }" @click="scoreSlice = 'all'">
-          All · {{ facilities.length }}
+        <cv-button 
+          kind="ghost" 
+          :class="{ 'slice-active': scoreSlice === 'all' }" 
+          @click="scoreSlice = 'all'"
+        >
+          All ({{ facilities.length }})
         </cv-button>
-        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'elite' }" @click="scoreSlice = 'elite'">
-          Elite · {{ scoreSlices.elite }}
+        <cv-button 
+          kind="ghost" 
+          :class="{ 'slice-active': scoreSlice === 'elite' }" 
+          @click="scoreSlice = 'elite'"
+        >
+          Elite ({{ scoreSlices.elite }})
         </cv-button>
-        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'solid' }" @click="scoreSlice = 'solid'">
-          Solid · {{ scoreSlices.solid }}
+        <cv-button 
+          kind="ghost" 
+          :class="{ 'slice-active': scoreSlice === 'solid' }" 
+          @click="scoreSlice = 'solid'"
+        >
+          Solid ({{ scoreSlices.solid }})
         </cv-button>
-        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'watch' }" @click="scoreSlice = 'watch'">
-          Watch · {{ scoreSlices.watch }}
+        <cv-button 
+          kind="ghost" 
+          :class="{ 'slice-active': scoreSlice === 'watch' }" 
+          @click="scoreSlice = 'watch'"
+        >
+          Watch ({{ scoreSlices.watch }})
         </cv-button>
       </div>
 
@@ -486,9 +501,9 @@ onMounted(async () => {
       <div v-if="filteredFacilities.length > 0" class="trust-pagination">
         <cv-pagination
           :number-of-items="filteredFacilities.length"
-          :actual-items-on-page="paginatedFacilities.length"
           :page="currentPage"
           :page-sizes="paginationPageSizes"
+          :page-size="pageSize"
           @change="onPaginationChange"
         />
       </div>
@@ -499,32 +514,42 @@ onMounted(async () => {
         <h2 class="trust-heading">Data provenance</h2>
       </header>
       <p class="trust-note">
-        Trustaraunt aggregates LA County Open Data, San Diego Socrata, Long Beach public feeds,
+        Cleanplated aggregates LA County Open Data, San Diego Socrata, Long Beach public feeds,
         and Orange/Pasadena public-record or portal data, plus Riverside/San Bernardino LIVES.
       </p>
-      <ul class="trust-provenance">
-        <li v-for="connector in connectorRows" :key="connector.source" class="trust-card trust-card--provenance">
-          <div class="trust-card__main">
-            <p class="trust-card__title">{{ formatSourceName(connector.source) }}</p>
-            <p class="trust-note">
+      <cv-structured-list>
+        <template v-slot:headings>
+          <cv-structured-list-heading>Data Source</cv-structured-list-heading>
+          <cv-structured-list-heading>Records Fetched</cv-structured-list-heading>
+          <cv-structured-list-heading>Status</cv-structured-list-heading>
+        </template>
+        <template v-slot:items>
+          <cv-structured-list-item v-for="connector in connectorRows" :key="connector.source">
+            <cv-structured-list-data>
+              {{ formatSourceName(connector.source) }}
+              <cv-inline-notification
+                v-if="connector.error"
+                kind="warning"
+                title="Connector issue"
+                :sub-title="summarizeConnectorError(connector.error) ?? ''"
+                :hide-close-button="true"
+                :low-contrast="true"
+                style="margin-top: 0.5rem;"
+              />
+            </cv-structured-list-data>
+            <cv-structured-list-data>
               {{
                 connector.error
-                  ? 'Unavailable in latest ingestion run'
-                  : `${connector.fetched_records.toLocaleString()} records fetched`
+                  ? 'N/A'
+                  : connector.fetched_records.toLocaleString()
               }}
-            </p>
-            <cv-inline-notification
-              v-if="connector.error"
-              kind="warning"
-              title="Connector warning"
-              :sub-title="summarizeConnectorError(connector.error) ?? ''"
-              :hide-close-button="true"
-              :low-contrast="true"
-            />
-          </div>
-          <cv-tag :label="connector.error ? 'Error' : 'Healthy'" :kind="connector.error ? 'red' : 'green'" />
-        </li>
-      </ul>
+            </cv-structured-list-data>
+            <cv-structured-list-data>
+              <cv-tag :label="connector.error ? 'Error' : 'Healthy'" :kind="connector.error ? 'red' : 'green'" />
+            </cv-structured-list-data>
+          </cv-structured-list-item>
+        </template>
+      </cv-structured-list>
     </section>
   </main>
 </template>
