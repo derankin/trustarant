@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { ThumbsDown16, ThumbsUp16 } from '@carbon/icons-vue'
+import { trackEvent } from './lib/analytics'
 
 type FacilitySummary = {
   id: string
@@ -122,6 +123,13 @@ const resolveApiBaseUrl = () => {
 
 const apiBaseUrl = resolveApiBaseUrl()
 
+const classifyQueryTerm = (term: string) => {
+  const trimmed = term.trim()
+  if (!trimmed) return 'empty'
+  if (/^\d{5}$/.test(trimmed)) return 'zip'
+  return 'text'
+}
+
 const activeCenter = computed(() => {
   if (userLocation.value) {
     return {
@@ -174,6 +182,12 @@ const scoreBandMeta = (score: number) => {
 }
 
 watch([jurisdictionFilter, sortMode, scoreSlice, recentOnly], () => {
+  trackEvent('cp_filters_changed', {
+    jurisdiction: jurisdictionFilter.value,
+    sort_mode: sortMode.value,
+    score_slice: scoreSlice.value,
+    recent_only: recentOnly.value,
+  })
   void fetchFacilities(true)
 })
 
@@ -278,7 +292,16 @@ const submitVote = async (facilityId: string, vote: VoteType) => {
     if (!response.ok) {
       if (response.status === 429) {
         error.value = 'Vote limit reached. Please wait a minute before trying again.'
+        trackEvent('cp_vote_rate_limited', {
+          facility_id: facilityId,
+          vote,
+        })
       } else {
+        trackEvent('cp_vote_failed', {
+          facility_id: facilityId,
+          vote,
+          status_code: response.status,
+        })
         throw new Error(`Vote failed (${response.status})`)
       }
       return
@@ -292,10 +315,22 @@ const submitVote = async (facilityId: string, vote: VoteType) => {
       dislikes: Number(summary.dislikes ?? 0),
       vote_score: Number(summary.vote_score ?? 0),
     })
+    trackEvent('cp_vote_submitted', {
+      facility_id: facilityId,
+      vote,
+      likes: Number(summary.likes ?? 0),
+      dislikes: Number(summary.dislikes ?? 0),
+      vote_score: Number(summary.vote_score ?? 0),
+    })
     void fetchTopTen()
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'Vote submission failed'
     error.value = message
+    trackEvent('cp_vote_exception', {
+      facility_id: facilityId,
+      vote,
+      error_message: message,
+    })
   } finally {
     voteInFlight.value = { ...voteInFlight.value, [facilityId]: false }
   }
@@ -364,8 +399,13 @@ async function fetchTopTen() {
 
     const payload: TopPicksResponse = await response.json()
     topTenFacilities.value = (payload.data ?? []).map(withVoteDefaults)
+    trackEvent('cp_top10_loaded', {
+      top10_count: topTenFacilities.value.length,
+      top_like_count: topTenFacilities.value[0]?.likes ?? 0,
+    })
   } catch {
     topTenFacilities.value = []
+    trackEvent('cp_top10_load_failed')
   } finally {
     topTenLoading.value = false
   }
@@ -380,6 +420,11 @@ const onPaginationChange = ({ page, length }: PaginationChange) => {
 
   pageSize.value = nextPageSize
   currentPage.value = nextPage
+  trackEvent('cp_pagination_changed', {
+    page: currentPage.value,
+    page_size: pageSize.value,
+    total_matches: totalMatches.value,
+  })
   void fetchFacilities()
 }
 
@@ -387,6 +432,10 @@ const onRadiusChange = (rawValue: string | number) => {
   const parsed = typeof rawValue === 'string' ? Number.parseFloat(rawValue) : rawValue
   if (Number.isFinite(parsed)) {
     radiusMiles.value = parsed
+    trackEvent('cp_radius_changed', {
+      radius_miles: radiusMiles.value,
+      keyword_mode: hasKeywordQuery.value,
+    })
   }
   void fetchFacilities(true)
 }
@@ -425,15 +474,48 @@ async function fetchFacilities(resetPage = false) {
         await fetchFacilities()
       }
     }
+    trackEvent('cp_search_results_loaded', {
+      total_count: totalMatches.value,
+      page: currentPage.value,
+      page_size: pageSize.value,
+      result_count: facilities.value.length,
+      query_type: classifyQueryTerm(search.value),
+      query_length: search.value.trim().length,
+      jurisdiction: jurisdictionFilter.value,
+      score_slice: scoreSlice.value,
+      sort_mode: sortMode.value,
+      recent_only: recentOnly.value,
+      radius_miles: radiusMiles.value,
+      keyword_mode: hasKeywordQuery.value,
+    })
     void fetchTopTen()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : 'Unexpected fetch error'
+    trackEvent('cp_search_results_failed', {
+      query_type: classifyQueryTerm(search.value),
+      query_length: search.value.trim().length,
+      jurisdiction: jurisdictionFilter.value,
+      score_slice: scoreSlice.value,
+      sort_mode: sortMode.value,
+      recent_only: recentOnly.value,
+      radius_miles: radiusMiles.value,
+    })
   } finally {
     loading.value = false
   }
 }
 
 async function onSearchSubmit() {
+  trackEvent('cp_search_submitted', {
+    query_type: classifyQueryTerm(search.value),
+    query_length: search.value.trim().length,
+    keyword_mode: hasKeywordQuery.value,
+    jurisdiction: jurisdictionFilter.value,
+    score_slice: scoreSlice.value,
+    recent_only: recentOnly.value,
+    radius_miles: radiusMiles.value,
+  })
+
   // Keyword searches should default to broad matching.
   if (hasKeywordQuery.value) {
     const changedFilters = scoreSlice.value !== 'all' || recentOnly.value
@@ -462,15 +544,19 @@ async function fetchIngestionStats() {
 async function requestBrowserLocation() {
   if (locationState.value === 'requesting') return
 
+  trackEvent('cp_location_requested')
+
   if (!window.isSecureContext) {
     locationState.value = 'unsupported'
     locationMessage.value = 'Location requires a secure HTTPS connection.'
+    trackEvent('cp_location_result', { status: 'unsupported_insecure_context' })
     return
   }
 
   if (!('geolocation' in navigator)) {
     locationState.value = 'unsupported'
     locationMessage.value = 'Browser geolocation is not supported on this device.'
+    trackEvent('cp_location_result', { status: 'unsupported_browser' })
     return
   }
 
@@ -509,6 +595,10 @@ async function requestBrowserLocation() {
     }
     locationState.value = 'granted'
     locationMessage.value = `Using browser location (±${Math.round(position.coords.accuracy)}m accuracy).`
+    trackEvent('cp_location_result', {
+      status: 'granted',
+      accuracy_meters: Math.round(position.coords.accuracy),
+    })
   } catch (cause) {
     userLocation.value = null
     const geolocationError = cause as GeolocationPositionError
@@ -516,17 +606,21 @@ async function requestBrowserLocation() {
     if (geolocationError?.code === GEO_ERROR_PERMISSION_DENIED) {
       locationState.value = 'denied'
       locationMessage.value = `Location permission denied. ${geolocationPermissionHint()} Reverting to Southern California default center.`
+      trackEvent('cp_location_result', { status: 'permission_denied' })
     } else if (geolocationError?.code === GEO_ERROR_TIMEOUT) {
       locationState.value = 'default'
       locationMessage.value =
         'Location lookup timed out on this network/device. Reverting to Southern California default center.'
+      trackEvent('cp_location_result', { status: 'timeout' })
     } else if (geolocationError?.code === GEO_ERROR_POSITION_UNAVAILABLE) {
       locationState.value = 'default'
       locationMessage.value =
         'Location is currently unavailable on this device. Reverting to Southern California default center.'
+      trackEvent('cp_location_result', { status: 'position_unavailable' })
     } else {
       locationState.value = 'default'
       locationMessage.value = 'Could not determine your location. Reverting to Southern California default center.'
+      trackEvent('cp_location_result', { status: 'unknown_error' })
     }
   }
 
@@ -534,6 +628,10 @@ async function requestBrowserLocation() {
 }
 
 onMounted(async () => {
+  trackEvent('cp_app_loaded', {
+    page_path: window.location.pathname,
+    page_title: document.title,
+  })
   await Promise.all([fetchFacilities(true), fetchIngestionStats()])
 })
 </script>
