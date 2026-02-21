@@ -22,7 +22,7 @@ const DEFAULT_BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7
 const DEFAULT_OC_LIVE_ENDPOINT: &str = "https://inspections.myhealthdepartment.com/genericEndpoint";
 const DEFAULT_OC_LIVE_REFERER: &str =
     "https://inspections.myhealthdepartment.com/orange-county/restaurant-closures";
-const DEFAULT_OC_LIVE_PAGE_SIZE: usize = 200;
+const DEFAULT_OC_LIVE_PAGE_SIZE: usize = 70;
 const DEFAULT_OC_LIVE_MAX_RECORDS: usize = 10_000;
 const DEFAULT_OC_LIVE_DAYS_WINDOW: u32 = 60;
 const DEFAULT_PASADENA_DIRECTORY_URL: &str = "https://services2.arcgis.com/zNjnZafDYCAJAbN0/arcgis/rest/services/Pasadena_Restaurant_Directory/FeatureServer/0";
@@ -208,21 +208,49 @@ impl CpraConnector {
                 "sort": "This_Form.inspectionDate|DESC",
             });
 
-            let response: Value = self
-                .client
-                .post(&self.oc_live_endpoint)
-                .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
-                .header(reqwest::header::ORIGIN, "https://inspections.myhealthdepartment.com")
-                .header(reqwest::header::REFERER, DEFAULT_OC_LIVE_REFERER)
-                .json(&payload)
-                .send()
-                .await
-                .context("Orange County live portal request failed")?
-                .error_for_status()
-                .context("Orange County live portal returned non-success status")?
-                .json()
-                .await
-                .context("Orange County live portal JSON parse failed")?;
+            let mut last_error = None;
+            let mut response = None;
+
+            for _attempt in 1..=3 {
+                match self
+                    .client
+                    .post(&self.oc_live_endpoint)
+                    .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
+                    .header(reqwest::header::ORIGIN, "https://inspections.myhealthdepartment.com")
+                    .header(reqwest::header::REFERER, DEFAULT_OC_LIVE_REFERER)
+                    .header("X-Requested-With", "XMLHttpRequest")
+                    .json(&payload)
+                    .send()
+                    .await
+                {
+                    Ok(result) => match result.error_for_status() {
+                        Ok(ok) => match ok.json::<Value>().await {
+                            Ok(value) => {
+                                response = Some(value);
+                                break;
+                            }
+                            Err(error) => {
+                                last_error =
+                                    Some(anyhow::anyhow!("Orange County JSON parse failed: {error}"));
+                            }
+                        },
+                        Err(error) => {
+                            last_error =
+                                Some(anyhow::anyhow!("Orange County non-success status: {error}"));
+                        }
+                    },
+                    Err(error) => {
+                        last_error = Some(anyhow::anyhow!("Orange County request failed: {error}"));
+                    }
+                }
+            }
+
+            let Some(response) = response else {
+                let reason = last_error
+                    .map(|error| format!("{error:#}"))
+                    .unwrap_or_else(|| "unknown error".to_owned());
+                anyhow::bail!("Orange County live portal retries exhausted: {reason}");
+            };
 
             if response
                 .get("error")
