@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#eef7ff" />
+      <stop offset="60%" stop-color="#f7f4ee" />
+      <stop offset="100%" stop-color="#edf6ef" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)" />
+  <rect x="64" y="64" width="1072" height="502" rx="20" fill="#ffffff" stroke="#d9e1e7" />
+  <text x="112" y="154" fill="#0f62fe" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">
+    CLEANPLATED
+  </text>
+  <text x="112" y="264" fill="#161616" font-size="84" font-family="Georgia, 'Times New Roman', serif" font-weight="700">
+    Find safer food,
+  </text>
+  <text x="112" y="350" fill="#161616" font-size="84" font-family="Georgia, 'Times New Roman', serif" font-weight="700">
+    faster.
+  </text>
+  <text x="112" y="436" fill="#525252" font-size="36" font-family="Arial, Helvetica, sans-serif">
+    Southern California restaurant health scores in one place.
+  </text>
+</svg>

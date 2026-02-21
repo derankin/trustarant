@@ -9,8 +9,19 @@ ARG VITE_API_BASE_URL=http://localhost:8080
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 RUN npm run build
 
-FROM nginx:1.27-alpine
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+FROM node:24-alpine
+WORKDIR /app
+ENV NODE_ENV=production
 
-EXPOSE 80
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY server.mjs ./server.mjs
+COPY --from=build /app/dist ./dist
+
+ARG VITE_API_BASE_URL=http://localhost:8080
+ENV API_BASE_URL=${VITE_API_BASE_URL}
+ENV PUBLIC_BASE_URL=https://cleanplated.com
+
+EXPOSE 8080
+CMD ["node", "server.mjs"]
