@@ -12,6 +12,8 @@ const app = express()
 const port = Number(process.env.PORT || 8080)
 const apiBaseUrl = (process.env.API_BASE_URL || process.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 const publicBaseUrl = (process.env.PUBLIC_BASE_URL || 'https://cleanplated.com').replace(/\/$/, '')
+const configuredGaId = (process.env.GA_MEASUREMENT_ID || process.env.GOOGLE_ANALYTICS_ID || '').trim()
+const gaMeasurementId = /^[A-Za-z0-9-]+$/.test(configuredGaId) ? configuredGaId : ''
 const appTitle = 'CleanPlated'
 const defaultDescription =
   'CleanPlated helps you find safer food with Southern California restaurant health inspection data.'
@@ -63,9 +65,26 @@ const buildMetaTags = ({ title, description, url, image }) => {
   ].join('\n')
 }
 
+const buildAnalyticsTags = () => {
+  if (!gaMeasurementId) return ''
+
+  return [
+    `<script async src="https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}"></script>`,
+    `<script>`,
+    `window.dataLayer = window.dataLayer || [];`,
+    `function gtag(){dataLayer.push(arguments);}`,
+    `gtag('js', new Date());`,
+    `gtag('config', '${gaMeasurementId}', { anonymize_ip: true });`,
+    `</script>`,
+  ].join('\n')
+}
+
+const buildHeadTags = ({ title, description, url, image }) =>
+  [buildMetaTags({ title, description, url, image }), buildAnalyticsTags()].filter(Boolean).join('\n')
+
 const defaultMetaHtml = withMetaTags(
   indexHtml,
-  buildMetaTags({
+  buildHeadTags({
     title: `${appTitle} · Find safer food, faster.`,
     description: defaultDescription,
     url: `${publicBaseUrl}/`,
@@ -94,7 +113,7 @@ app.get('/share/f/:facilityId', async (req, res) => {
     if (!facility) {
       const notFoundMeta = withMetaTags(
         indexHtml,
-        buildMetaTags({
+        buildHeadTags({
           title: `${appTitle} · Restaurant Health Data`,
           description: defaultDescription,
           url: shareUrl,
@@ -109,7 +128,7 @@ app.get('/share/f/:facilityId', async (req, res) => {
     const description = `${facility.address}, ${facility.city} ${facility.postal_code} · ${facility.jurisdiction}`
     const html = withMetaTags(
       indexHtml,
-      buildMetaTags({
+      buildHeadTags({
         title,
         description,
         url: shareUrl,
