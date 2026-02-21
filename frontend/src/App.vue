@@ -45,6 +45,7 @@ type FacilitiesResponse = {
 
 type SortMode = 'trust_desc' | 'recent_desc' | 'name_asc'
 type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
+type HotNotChoice = 'hot' | 'not'
 type LocationState = 'default' | 'requesting' | 'granted' | 'denied' | 'unsupported'
 type PaginationChange = { start: number; page: number; length: number }
 type GeoOptions = PositionOptions
@@ -52,6 +53,7 @@ type GeoOptions = PositionOptions
 const GEO_ERROR_PERMISSION_DENIED = 1
 const GEO_ERROR_POSITION_UNAVAILABLE = 2
 const GEO_ERROR_TIMEOUT = 3
+const HOT_NOT_STORAGE_KEY = 'cleanplated_hot-not-v1'
 
 const fallbackLatitude = 34.0522
 const fallbackLongitude = -118.2437
@@ -63,6 +65,7 @@ const sliceCounts = ref<SliceCounts>({ all: 0, elite: 0, solid: 0, watch: 0 })
 const ingestionStats = ref<IngestionStats | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+const topTenLoading = ref(false)
 
 const search = ref('')
 const radiusMiles = ref(2)
@@ -77,6 +80,8 @@ const locationMessage = ref('Using Southern California default center (Downtown 
 
 const currentPage = ref(1)
 const pageSize = ref(12)
+const topTenFacilities = ref<FacilitySummary[]>([])
+const hotNotVotes = ref<Record<string, HotNotChoice>>({})
 const pageSizeChoices = [12, 24, 48]
 const jurisdictionOptions = [
   { label: 'All jurisdictions', value: 'all' },
@@ -91,9 +96,6 @@ const jurisdictionOptions = [
 ]
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
-const publicBaseUrl = import.meta.env.VITE_PUBLIC_BASE_URL ?? 'https://cleanplated.com'
-const shareStatus = ref<{ kind: 'success' | 'error'; message: string } | null>(null)
-let shareStatusTimer: ReturnType<typeof setTimeout> | null = null
 
 const activeCenter = computed(() => {
   if (userLocation.value) {
@@ -122,6 +124,19 @@ const pageEnd = computed(() =>
   Math.min((currentPage.value - 1) * pageSize.value + facilities.value.length, totalMatches.value),
 )
 const paginationPageSizes = computed(() => pageSizeChoices)
+const topTenRanked = computed(() =>
+  [...topTenFacilities.value].sort((left, right) => {
+    const leftVote = hotNotVotes.value[left.id] === 'hot' ? 1 : hotNotVotes.value[left.id] === 'not' ? -1 : 0
+    const rightVote =
+      hotNotVotes.value[right.id] === 'hot' ? 1 : hotNotVotes.value[right.id] === 'not' ? -1 : 0
+
+    if (leftVote !== rightVote) {
+      return rightVote - leftVote
+    }
+
+    return right.trust_score - left.trust_score
+  }),
+)
 
 const scoreBandMeta = (score: number) => {
   if (score >= 90) return { label: 'Elite', className: 'score-chip--elite' }
@@ -188,24 +203,37 @@ const distanceLabel = (facility: FacilitySummary) => {
   return `${miles.toFixed(1)} mi`
 }
 
-const currentPublicOrigin = () => {
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin
+const getVote = (facilityId: string) => hotNotVotes.value[facilityId] ?? null
+
+const persistVotes = () => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(HOT_NOT_STORAGE_KEY, JSON.stringify(hotNotVotes.value))
+  } catch {
+    // Ignore storage failures on locked-down devices.
   }
-  return publicBaseUrl
 }
 
-const facilityShareUrl = (facilityId: string) =>
-  `${currentPublicOrigin()}/share/f/${encodeURIComponent(facilityId)}`
-
-const setShareStatus = (kind: 'success' | 'error', message: string) => {
-  shareStatus.value = { kind, message }
-  if (shareStatusTimer) {
-    clearTimeout(shareStatusTimer)
+const loadVotes = () => {
+  if (typeof window === 'undefined') return
+  try {
+    const raw = window.localStorage.getItem(HOT_NOT_STORAGE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw) as Record<string, HotNotChoice>
+    hotNotVotes.value = parsed ?? {}
+  } catch {
+    hotNotVotes.value = {}
   }
-  shareStatusTimer = setTimeout(() => {
-    shareStatus.value = null
-  }, 4000)
+}
+
+const voteHotNot = (facilityId: string, vote: HotNotChoice) => {
+  if (hotNotVotes.value[facilityId] === vote) {
+    delete hotNotVotes.value[facilityId]
+  } else {
+    hotNotVotes.value[facilityId] = vote
+  }
+  hotNotVotes.value = { ...hotNotVotes.value }
+  persistVotes()
 }
 
 const isLikelyMobileSafari = () => {
@@ -229,17 +257,53 @@ const getCurrentPosition = (options: GeoOptions) =>
     navigator.geolocation.getCurrentPosition(resolve, reject, options)
   })
 
-async function copyShareLink(facilityId: string) {
-  const url = facilityShareUrl(facilityId)
+const buildFacilitiesQuery = (page: number, requestedPageSize: number, sort: SortMode) => {
+  const query = new URLSearchParams({
+    page: String(page),
+    page_size: String(requestedPageSize),
+    sort,
+  })
+  const term = search.value.trim()
+
+  if (term) {
+    query.set('q', term)
+  } else {
+    query.set('latitude', String(activeCenter.value.latitude))
+    query.set('longitude', String(activeCenter.value.longitude))
+    query.set('radius_miles', String(radiusMiles.value))
+  }
+
+  if (jurisdictionFilter.value !== 'all') {
+    query.set('jurisdiction', jurisdictionFilter.value)
+  }
+
+  if (scoreSlice.value !== 'all') {
+    query.set('score_slice', scoreSlice.value)
+  }
+
+  if (recentOnly.value) {
+    query.set('recent_only', 'true')
+  }
+
+  return query
+}
+
+async function fetchTopTen() {
+  topTenLoading.value = true
 
   try {
-    if (!navigator?.clipboard?.writeText) {
-      throw new Error('Clipboard API unavailable')
+    const query = buildFacilitiesQuery(1, 10, 'trust_desc')
+    const response = await fetch(`${apiBaseUrl}/api/v1/facilities?${query.toString()}`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch top 10 (${response.status})`)
     }
-    await navigator.clipboard.writeText(url)
-    setShareStatus('success', 'Share link copied.')
+
+    const payload: FacilitiesResponse = await response.json()
+    topTenFacilities.value = payload.data ?? []
   } catch {
-    setShareStatus('error', `Could not copy automatically. Use this link: ${url}`)
+    topTenFacilities.value = []
+  } finally {
+    topTenLoading.value = false
   }
 }
 
@@ -271,32 +335,7 @@ async function fetchFacilities(resetPage = false) {
   loading.value = true
   error.value = null
 
-  const query = new URLSearchParams({
-    page: String(currentPage.value),
-    page_size: String(pageSize.value),
-    sort: sortMode.value,
-  })
-  const term = search.value.trim()
-
-  if (term) {
-    query.set('q', term)
-  } else {
-    query.set('latitude', String(activeCenter.value.latitude))
-    query.set('longitude', String(activeCenter.value.longitude))
-    query.set('radius_miles', String(radiusMiles.value))
-  }
-
-  if (jurisdictionFilter.value !== 'all') {
-    query.set('jurisdiction', jurisdictionFilter.value)
-  }
-
-  if (scoreSlice.value !== 'all') {
-    query.set('score_slice', scoreSlice.value)
-  }
-
-  if (recentOnly.value) {
-    query.set('recent_only', 'true')
-  }
+  const query = buildFacilitiesQuery(currentPage.value, pageSize.value, sortMode.value)
 
   try {
     const response = await fetch(`${apiBaseUrl}/api/v1/facilities?${query.toString()}`)
@@ -322,6 +361,7 @@ async function fetchFacilities(resetPage = false) {
         await fetchFacilities()
       }
     }
+    void fetchTopTen()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : 'Unexpected fetch error'
   } finally {
@@ -430,6 +470,7 @@ async function requestBrowserLocation() {
 }
 
 onMounted(async () => {
+  loadVotes()
   await Promise.all([fetchFacilities(true), fetchIngestionStats()])
 })
 </script>
@@ -545,14 +586,54 @@ onMounted(async () => {
         <cv-tag v-if="distanceLabel(featured)" :label="distanceLabel(featured) ?? ''" kind="teal" />
       </div>
       <p class="trust-note">Last inspection: {{ formatDate(featured.latest_inspection_at) }}</p>
-      <div class="trust-share-row">
-        <cv-button kind="tertiary" class="trust-share-button" @click="copyShareLink(featured.id)">
-          Copy share link
-        </cv-button>
-        <a class="trust-share-inline-link" :href="facilityShareUrl(featured.id)" target="_blank" rel="noopener">
-          Open share page
-        </a>
-      </div>
+    </section>
+
+    <section class="trust-panel">
+      <header class="trust-section-head">
+        <h2 class="trust-heading">Top 10: Hot or Not</h2>
+      </header>
+      <p class="trust-note">Mark your picks as hot or not. Hot votes bubble to the top for your next visit.</p>
+
+      <cv-inline-loading v-if="topTenLoading" state="loading" loading-text="Loading top facilities..." />
+      <cv-inline-notification
+        v-else-if="topTenRanked.length === 0"
+        kind="info"
+        title="Top 10 unavailable"
+        sub-title="Try widening your search or clearing filters."
+        :hide-close-button="true"
+      />
+
+      <ol v-else class="trust-topten">
+        <li v-for="(facility, index) in topTenRanked" :key="facility.id" class="trust-topten__item">
+          <div class="trust-topten__rank">{{ index + 1 }}</div>
+          <div class="trust-topten__main">
+            <p class="trust-card__title">{{ facility.name }}</p>
+            <p class="trust-address">{{ facility.address }}, {{ facility.city }} {{ facility.postal_code }}</p>
+            <div class="trust-tags">
+              <cv-tag :label="facility.jurisdiction" kind="cool-gray" />
+              <cv-tag :label="`${facility.trust_score}`" kind="green" />
+            </div>
+          </div>
+          <div class="trust-topten__actions">
+            <cv-button
+              size="sm"
+              kind="ghost"
+              :class="{ 'slice-active': getVote(facility.id) === 'hot' }"
+              @click="voteHotNot(facility.id, 'hot')"
+            >
+              Hot
+            </cv-button>
+            <cv-button
+              size="sm"
+              kind="ghost"
+              :class="{ 'slice-active': getVote(facility.id) === 'not' }"
+              @click="voteHotNot(facility.id, 'not')"
+            >
+              Not
+            </cv-button>
+          </div>
+        </li>
+      </ol>
     </section>
 
     <section class="trust-panel">
@@ -594,9 +675,6 @@ onMounted(async () => {
           </div>
           <div class="trust-card__actions">
             <cv-tag :label="`${facility.trust_score}`" kind="green" />
-            <cv-button kind="ghost" class="trust-share-button" @click="copyShareLink(facility.id)">
-              Share
-            </cv-button>
           </div>
         </li>
       </ul>
@@ -610,16 +688,6 @@ onMounted(async () => {
           @change="onPaginationChange"
         />
       </div>
-
-      <cv-inline-notification
-        v-if="shareStatus"
-        :kind="shareStatus.kind"
-        title="Share"
-        :sub-title="shareStatus.message"
-        :hide-close-button="true"
-        :low-contrast="true"
-        style="margin-top: 0.75rem;"
-      />
     </section>
 
     <section class="trust-panel">

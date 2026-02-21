@@ -185,6 +185,54 @@ body {
   font-weight: 600;
 }
 
+.trust-card__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.trust-topten {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.trust-topten__item {
+  border: 1px solid #d0d7de;
+  border-radius: 0.45rem;
+  padding: 0.65rem;
+  background: #fff;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.6rem;
+}
+
+.trust-topten__rank {
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  border: 1px solid #a8b0b8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #161616;
+}
+
+.trust-topten__main {
+  min-width: 0;
+}
+
+.trust-topten__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.5rem;
+}
+
 .trust-pagination {
   margin-top: 0.8rem;
 }
@@ -214,5 +262,15 @@ body {
 
   .trust-slices {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .trust-topten__item {
+    grid-template-columns: auto 1fr auto;
+    align-items: start;
+  }
+
+  .trust-topten__actions {
+    grid-column: auto;
+    flex-direction: column;
   }
 }
