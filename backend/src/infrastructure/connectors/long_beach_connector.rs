@@ -1,6 +1,6 @@
 use std::{env, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{NaiveDate, TimeZone, Utc};
 use reqwest::Client;
@@ -13,6 +13,8 @@ use crate::{
 
 const DEFAULT_CLOSURES_URL: &str =
     "https://www.longbeach.gov/health/inspections-and-reporting/inspections/restaurant-closures/";
+const DEFAULT_CLOSURES_URL_FALLBACK: &str =
+    "https://longbeach.gov/health/inspections-and-reporting/inspections/restaurant-closures/";
 const DEFAULT_LIMIT: usize = 200;
 
 #[derive(Clone)]
@@ -43,8 +45,6 @@ impl LongBeachConnector {
 
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
-            .http1_only()
-            .danger_accept_invalid_certs(true)
             .user_agent("TrustarauntBot/1.0 (+https://trustaraunt.com)")
             .build()
             .unwrap_or_else(|_| Client::new());
@@ -64,21 +64,7 @@ impl HealthDataConnector for LongBeachConnector {
     }
 
     async fn fetch_facilities(&self) -> Result<Vec<SourceFacilityInput>> {
-        let html = self
-            .client
-            .get(&self.closures_url)
-            .header(
-                reqwest::header::ACCEPT,
-                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            )
-            .send()
-            .await
-            .context("Long Beach closures page request failed")?
-            .error_for_status()
-            .context("Long Beach closures page returned non-success status")?
-            .text()
-            .await
-            .context("Long Beach closures page body read failed")?;
+        let html = fetch_long_beach_html(&self.client, &self.closures_url).await?;
 
         let document = Html::parse_document(&html);
         let row_selector = Selector::parse("table tr").expect("valid row selector");
@@ -166,8 +152,49 @@ impl HealthDataConnector for LongBeachConnector {
             }
         }
 
+        if facilities.is_empty() {
+            anyhow::bail!(
+                "Long Beach closures page returned zero parsed rows (page structure may have changed)"
+            );
+        }
+
         Ok(facilities)
     }
+}
+
+async fn fetch_long_beach_html(client: &Client, primary_url: &str) -> Result<String> {
+    let mut urls = vec![primary_url.to_owned()];
+    if !primary_url.eq_ignore_ascii_case(DEFAULT_CLOSURES_URL_FALLBACK) {
+        urls.push(DEFAULT_CLOSURES_URL_FALLBACK.to_owned());
+    }
+
+    let mut errors = Vec::new();
+    for url in urls {
+        match client
+            .get(&url)
+            .header(
+                reqwest::header::ACCEPT,
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            )
+            .send()
+            .await
+        {
+            Ok(response) => match response.error_for_status() {
+                Ok(ok) => match ok.text().await {
+                    Ok(body) if !body.trim().is_empty() => return Ok(body),
+                    Ok(_) => errors.push(format!("{url}: empty response body")),
+                    Err(error) => errors.push(format!("{url}: body read failed: {error}")),
+                },
+                Err(error) => errors.push(format!("{url}: non-success status: {error}")),
+            },
+            Err(error) => errors.push(format!("{url}: request failed: {error}")),
+        }
+    }
+
+    anyhow::bail!(
+        "Long Beach closures page request failed across all endpoints: {}",
+        errors.join(" | ")
+    );
 }
 
 fn parse_long_beach_date(value: &str) -> Option<chrono::DateTime<Utc>> {

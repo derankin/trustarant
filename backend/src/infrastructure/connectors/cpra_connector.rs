@@ -116,6 +116,12 @@ impl HealthDataConnector for CpraConnector {
     }
 
     async fn fetch_facilities(&self) -> Result<Vec<SourceFacilityInput>> {
+        if self.orange_county_url.is_none() && self.pasadena_url.is_none() {
+            anyhow::bail!(
+                "CPRA connector not configured: set TRUSTARANT_OC_CPRA_EXPORT_URL and/or TRUSTARANT_PASADENA_CPRA_EXPORT_URL"
+            );
+        }
+
         let mut facilities = Vec::new();
 
         if let Some(url) = &self.orange_county_url {
@@ -130,6 +136,10 @@ impl HealthDataConnector for CpraConnector {
                 self.fetch_export(url, Jurisdiction::Pasadena, "pas")
                     .await?,
             );
+        }
+
+        if facilities.is_empty() {
+            anyhow::bail!("CPRA connector fetched zero records from configured export URLs");
         }
 
         Ok(facilities)

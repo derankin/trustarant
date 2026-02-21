@@ -9,3 +9,9 @@ disable_frontend_invoker_iam_check = true
 enable_ingestion_scheduler = true
 ingestion_refresh_schedule = "0 9 * * *"
 database_url_secret_id = "trustarant-database-url"
+long_beach_limit = 200
+long_beach_timeout_secs = 20
+cpra_timeout_secs = 20
+# Provide when you have machine-readable CPRA exports:
+# oc_cpra_export_url = "https://example.com/orange-county-export.csv"
+# pasadena_cpra_export_url = "https://example.com/pasadena-export.json"

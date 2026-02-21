@@ -161,6 +161,12 @@ const formatSourceName = (source: string) => {
   return labels[source] ?? source.replace(/_/g, ' ')
 }
 
+const summarizeConnectorError = (value?: string | null) => {
+  if (!value) return null
+  const firstLine = value.split('\n')[0] ?? value
+  return firstLine.slice(0, 180)
+}
+
 const formatDate = (value?: string) => {
   if (!value) return 'No date available'
   return new Date(value).toLocaleDateString()
@@ -401,9 +407,9 @@ onMounted(async () => {
         </button>
       </div>
 
-      <label class="cds--checkbox-label trust-checkbox">
-        <input v-model="recentOnly" class="cds--checkbox" type="checkbox" />
-        <span class="cds--checkbox-label-text">Only show inspections from the last 90 days</span>
+      <label class="trust-checkbox" for="recent-only">
+        <input id="recent-only" v-model="recentOnly" class="trust-checkbox-input" type="checkbox" />
+        <span class="cds--body-compact-02">Only show inspections from the last 90 days</span>
       </label>
     </section>
 
@@ -464,7 +470,10 @@ onMounted(async () => {
           <div>
             <p class="cds--body-compact-02 trust-list-title">{{ formatSourceName(connector.source) }}</p>
             <p class="cds--body-compact-01 trust-note">
-              {{ connector.fetched_records.toLocaleString() }} records fetched
+              {{ connector.error ? 'Unavailable in latest ingestion run' : `${connector.fetched_records.toLocaleString()} records fetched` }}
+            </p>
+            <p v-if="connector.error" class="cds--body-compact-01 trust-connector-error">
+              {{ summarizeConnectorError(connector.error) }}
             </p>
           </div>
           <span class="cds--tag" :class="connector.error ? 'cds--tag--red' : 'cds--tag--green'">

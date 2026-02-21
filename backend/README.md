@@ -78,7 +78,8 @@ Config:
 
 ### Long Beach (Live web page)
 
-`LongBeachConnector` fetches the live Long Beach restaurant-closures page.
+`LongBeachConnector` fetches the live Long Beach restaurant-closures page with
+fallback endpoint logic and strict parse checks (fails ingestion status when no rows parse).
 
 Config:
 
@@ -111,6 +112,9 @@ Config:
 - `TRUSTARANT_OC_CPRA_EXPORT_URL`
 - `TRUSTARANT_PASADENA_CPRA_EXPORT_URL`
 - `TRUSTARANT_CPRA_TIMEOUT_SECS`
+
+If neither export URL is configured, connector status is reported as error
+(`not configured`) so the dashboard does not show a misleading "healthy 0 records".
 
 ## Run with Docker Compose
 

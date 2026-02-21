@@ -131,6 +131,45 @@ resource "google_cloud_run_v2_service" "api" {
       }
 
       env {
+        name  = "TRUSTARANT_LONG_BEACH_LIMIT"
+        value = tostring(var.long_beach_limit)
+      }
+
+      env {
+        name  = "TRUSTARANT_LONG_BEACH_TIMEOUT_SECS"
+        value = tostring(var.long_beach_timeout_secs)
+      }
+
+      env {
+        name  = "TRUSTARANT_CPRA_TIMEOUT_SECS"
+        value = tostring(var.cpra_timeout_secs)
+      }
+
+      dynamic "env" {
+        for_each = var.long_beach_closures_url != "" ? [var.long_beach_closures_url] : []
+        content {
+          name  = "TRUSTARANT_LONG_BEACH_CLOSURES_URL"
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.oc_cpra_export_url != "" ? [var.oc_cpra_export_url] : []
+        content {
+          name  = "TRUSTARANT_OC_CPRA_EXPORT_URL"
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.pasadena_cpra_export_url != "" ? [var.pasadena_cpra_export_url] : []
+        content {
+          name  = "TRUSTARANT_PASADENA_CPRA_EXPORT_URL"
+          value = env.value
+        }
+      }
+
+      env {
         name = "DATABASE_URL"
         value_source {
           secret_key_ref {
@@ -149,9 +188,9 @@ resource "google_cloud_run_v2_service" "api" {
 }
 
 resource "google_cloud_run_v2_job" "ingestion" {
-  project  = var.project_id
-  name     = "trustarant-ingestion"
-  location = var.region
+  project             = var.project_id
+  name                = "trustarant-ingestion"
+  location            = var.region
   deletion_protection = false
 
   template {
@@ -166,6 +205,45 @@ resource "google_cloud_run_v2_job" "ingestion" {
         env {
           name  = "TRUSTARANT_RUN_MODE"
           value = "refresh_once"
+        }
+
+        env {
+          name  = "TRUSTARANT_LONG_BEACH_LIMIT"
+          value = tostring(var.long_beach_limit)
+        }
+
+        env {
+          name  = "TRUSTARANT_LONG_BEACH_TIMEOUT_SECS"
+          value = tostring(var.long_beach_timeout_secs)
+        }
+
+        env {
+          name  = "TRUSTARANT_CPRA_TIMEOUT_SECS"
+          value = tostring(var.cpra_timeout_secs)
+        }
+
+        dynamic "env" {
+          for_each = var.long_beach_closures_url != "" ? [var.long_beach_closures_url] : []
+          content {
+            name  = "TRUSTARANT_LONG_BEACH_CLOSURES_URL"
+            value = env.value
+          }
+        }
+
+        dynamic "env" {
+          for_each = var.oc_cpra_export_url != "" ? [var.oc_cpra_export_url] : []
+          content {
+            name  = "TRUSTARANT_OC_CPRA_EXPORT_URL"
+            value = env.value
+          }
+        }
+
+        dynamic "env" {
+          for_each = var.pasadena_cpra_export_url != "" ? [var.pasadena_cpra_export_url] : []
+          content {
+            name  = "TRUSTARANT_PASADENA_CPRA_EXPORT_URL"
+            value = env.value
+          }
         }
 
         env {

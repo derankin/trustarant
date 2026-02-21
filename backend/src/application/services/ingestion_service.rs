@@ -99,14 +99,15 @@ impl IngestionService {
                     }
                 }
                 Err(error) => {
+                    let error_chain = format!("{error:#}");
                     connector_stats.push(ConnectorIngestionStatus {
                         source: connector.source_name().to_owned(),
                         fetched_records: 0,
-                        error: Some(error.to_string()),
+                        error: Some(error_chain.clone()),
                     });
                     warn!(
                         source = connector.source_name(),
-                        error = %error,
+                        error = %error_chain,
                         "Connector fetch failed"
                     );
                 }
@@ -174,10 +175,11 @@ impl IngestionService {
                 Ok(records) => return Ok(records),
                 Err(error) if attempt < CONNECTOR_MAX_ATTEMPTS => {
                     let backoff_seconds = (attempt as u64) * 2;
+                    let error_chain = format!("{error:#}");
                     warn!(
                         source = connector.source_name(),
                         attempt,
-                        error = %error,
+                        error = %error_chain,
                         "Connector fetch failed, retrying"
                     );
                     sleep(Duration::from_secs(backoff_seconds)).await;
