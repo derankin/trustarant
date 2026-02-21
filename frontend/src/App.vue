@@ -102,7 +102,25 @@ const jurisdictionOptions = [
   { label: 'Vernon', value: 'Vernon' },
 ]
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
+const resolveApiBaseUrl = () => {
+  const configured = import.meta.env.VITE_API_BASE_URL
+  if (configured && configured.trim().length > 0) {
+    return configured
+  }
+
+  if (typeof window === 'undefined') {
+    return 'http://localhost:8080'
+  }
+
+  const { origin, hostname, port } = window.location
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return port === '8080' ? origin : 'http://localhost:8080'
+  }
+
+  return origin
+}
+
+const apiBaseUrl = resolveApiBaseUrl()
 
 const activeCenter = computed(() => {
   if (userLocation.value) {
@@ -643,8 +661,8 @@ onMounted(async () => {
       <cv-inline-notification
         v-else-if="topTenRanked.length === 0"
         kind="info"
-        title="Top 10 unavailable"
-        sub-title="Try widening your search or clearing filters."
+        title="No community likes yet"
+        sub-title="Be the first to like a restaurant and shape the Top 10."
         :hide-close-button="true"
       />
 

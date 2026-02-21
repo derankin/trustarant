@@ -245,6 +245,12 @@ impl DirectoryService {
             })
             .collect::<Vec<_>>();
 
+        // Top picks represent active community preference. Exclude entries with no likes.
+        ranked.retain(|(_, votes)| votes.likes > 0);
+        if ranked.is_empty() {
+            return Ok(Vec::new());
+        }
+
         ranked.sort_by(|(left_facility, left_votes), (right_facility, right_votes)| {
             right_votes
                 .likes
