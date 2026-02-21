@@ -27,6 +27,22 @@ type IngestionStats = {
   connector_stats: ConnectorIngestionStatus[]
 }
 
+type SliceCounts = {
+  all: number
+  elite: number
+  solid: number
+  watch: number
+}
+
+type FacilitiesResponse = {
+  data: FacilitySummary[]
+  count: number
+  total_count: number
+  page: number
+  page_size: number
+  slice_counts?: SliceCounts
+}
+
 type SortMode = 'trust_desc' | 'recent_desc' | 'name_asc'
 type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
 type LocationState = 'default' | 'requesting' | 'granted' | 'denied' | 'unsupported'
@@ -37,6 +53,8 @@ const fallbackLongitude = -118.2437
 const fallbackLabel = 'Downtown Los Angeles'
 
 const facilities = ref<FacilitySummary[]>([])
+const totalMatches = ref(0)
+const sliceCounts = ref<SliceCounts>({ all: 0, elite: 0, solid: 0, watch: 0 })
 const ingestionStats = ref<IngestionStats | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -55,6 +73,17 @@ const locationMessage = ref('Using Southern California default center (Downtown 
 const currentPage = ref(1)
 const pageSize = ref(12)
 const pageSizeChoices = [12, 24, 48]
+const jurisdictionOptions = [
+  { label: 'All jurisdictions', value: 'all' },
+  { label: 'Los Angeles County', value: 'Los Angeles County' },
+  { label: 'San Diego County', value: 'San Diego County' },
+  { label: 'Orange County', value: 'Orange County' },
+  { label: 'Riverside County', value: 'Riverside County' },
+  { label: 'San Bernardino County', value: 'San Bernardino County' },
+  { label: 'Long Beach', value: 'Long Beach' },
+  { label: 'Pasadena', value: 'Pasadena' },
+  { label: 'Vernon', value: 'Vernon' },
+]
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
 
@@ -75,6 +104,16 @@ const activeCenter = computed(() => {
 })
 
 const hasKeywordQuery = computed(() => search.value.trim().length > 0)
+const featured = computed(() => facilities.value[0])
+const totalPages = computed(() => Math.max(1, Math.ceil(totalMatches.value / pageSize.value)))
+const pageStart = computed(() => {
+  if (totalMatches.value === 0) return 0
+  return (currentPage.value - 1) * pageSize.value + 1
+})
+const pageEnd = computed(() =>
+  Math.min((currentPage.value - 1) * pageSize.value + facilities.value.length, totalMatches.value),
+)
+const paginationPageSizes = computed(() => pageSizeChoices)
 
 const scoreBandMeta = (score: number) => {
   if (score >= 90) return { label: 'Elite', className: 'score-chip--elite' }
@@ -82,96 +121,8 @@ const scoreBandMeta = (score: number) => {
   return { label: 'Watch', className: 'score-chip--watch' }
 }
 
-const scoreSlices = computed(() => {
-  const counts = { elite: 0, solid: 0, watch: 0 }
-
-  for (const facility of facilities.value) {
-    if (facility.trust_score >= 90) counts.elite += 1
-    else if (facility.trust_score >= 80) counts.solid += 1
-    else counts.watch += 1
-  }
-
-  return counts
-})
-
-const jurisdictionOptions = computed(() => {
-  const jurisdictions = [...new Set(facilities.value.map((facility) => facility.jurisdiction))]
-    .sort((left, right) => left.localeCompare(right))
-    .map((jurisdiction) => ({
-      label: jurisdiction,
-      value: jurisdiction,
-    }))
-
-  return [{ label: 'All jurisdictions', value: 'all' }, ...jurisdictions]
-})
-
-const filteredFacilities = computed(() => {
-  const now = Date.now()
-  const ninetyDaysMs = 90 * 24 * 60 * 60 * 1000
-
-  const filtered = facilities.value.filter((facility) => {
-    if (jurisdictionFilter.value !== 'all' && facility.jurisdiction !== jurisdictionFilter.value) {
-      return false
-    }
-
-    if (scoreSlice.value === 'elite' && facility.trust_score < 90) return false
-    if (scoreSlice.value === 'solid' && (facility.trust_score < 80 || facility.trust_score >= 90)) {
-      return false
-    }
-    if (scoreSlice.value === 'watch' && facility.trust_score >= 80) return false
-
-    if (recentOnly.value) {
-      if (!facility.latest_inspection_at) return false
-      const inspectedAt = new Date(facility.latest_inspection_at).getTime()
-      if (Number.isNaN(inspectedAt) || now - inspectedAt > ninetyDaysMs) return false
-    }
-
-    return true
-  })
-
-  filtered.sort((left, right) => {
-    switch (sortMode.value) {
-      case 'recent_desc': {
-        const leftDate = left.latest_inspection_at ? new Date(left.latest_inspection_at).getTime() : 0
-        const rightDate = right.latest_inspection_at ? new Date(right.latest_inspection_at).getTime() : 0
-        return rightDate - leftDate
-      }
-      case 'name_asc':
-        return left.name.localeCompare(right.name)
-      default:
-        return right.trust_score - left.trust_score
-    }
-  })
-
-  return filtered
-})
-
-const featured = computed(() => filteredFacilities.value[0])
-
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredFacilities.value.length / pageSize.value)))
-const paginatedFacilities = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredFacilities.value.slice(start, start + pageSize.value)
-})
-const pageStart = computed(() => {
-  if (filteredFacilities.value.length === 0) return 0
-  return (currentPage.value - 1) * pageSize.value + 1
-})
-const pageEnd = computed(() => Math.min(currentPage.value * pageSize.value, filteredFacilities.value.length))
-const paginationPageSizes = computed(() => pageSizeChoices)
-
-watch(
-  filteredFacilities,
-  () => {
-    if (currentPage.value > totalPages.value) {
-      currentPage.value = totalPages.value
-    }
-  },
-  { immediate: true },
-)
-
 watch([jurisdictionFilter, sortMode, scoreSlice, recentOnly], () => {
-  currentPage.value = 1
+  void fetchFacilities(true)
 })
 
 const lastRefreshLabel = computed(() => {
@@ -230,8 +181,15 @@ const distanceLabel = (facility: FacilitySummary) => {
 }
 
 const onPaginationChange = ({ page, length }: PaginationChange) => {
-  currentPage.value = Math.max(1, page)
-  pageSize.value = length
+  const nextPage = Math.max(1, page)
+  const nextPageSize = Math.max(1, length)
+  if (nextPage === currentPage.value && nextPageSize === pageSize.value) {
+    return
+  }
+
+  pageSize.value = nextPageSize
+  currentPage.value = nextPage
+  void fetchFacilities()
 }
 
 const onRadiusChange = (rawValue: string | number) => {
@@ -239,15 +197,22 @@ const onRadiusChange = (rawValue: string | number) => {
   if (Number.isFinite(parsed)) {
     radiusMiles.value = parsed
   }
-  void fetchFacilities()
+  void fetchFacilities(true)
 }
 
-async function fetchFacilities() {
+async function fetchFacilities(resetPage = false) {
+  if (resetPage) {
+    currentPage.value = 1
+  }
+
   loading.value = true
   error.value = null
-  currentPage.value = 1
 
-  const query = new URLSearchParams({ limit: '1000' })
+  const query = new URLSearchParams({
+    page: String(currentPage.value),
+    page_size: String(pageSize.value),
+    sort: sortMode.value,
+  })
   const term = search.value.trim()
 
   if (term) {
@@ -258,14 +223,42 @@ async function fetchFacilities() {
     query.set('radius_miles', String(radiusMiles.value))
   }
 
+  if (jurisdictionFilter.value !== 'all') {
+    query.set('jurisdiction', jurisdictionFilter.value)
+  }
+
+  if (scoreSlice.value !== 'all') {
+    query.set('score_slice', scoreSlice.value)
+  }
+
+  if (recentOnly.value) {
+    query.set('recent_only', 'true')
+  }
+
   try {
     const response = await fetch(`${apiBaseUrl}/api/v1/facilities?${query.toString()}`)
     if (!response.ok) {
       throw new Error(`Failed to fetch facilities (${response.status})`)
     }
 
-    const payload = await response.json()
+    const payload: FacilitiesResponse = await response.json()
     facilities.value = payload.data ?? []
+    totalMatches.value = payload.total_count ?? payload.count ?? facilities.value.length
+    currentPage.value = payload.page ?? currentPage.value
+    pageSize.value = payload.page_size ?? pageSize.value
+    sliceCounts.value = payload.slice_counts ?? {
+      all: totalMatches.value,
+      elite: 0,
+      solid: 0,
+      watch: 0,
+    }
+
+    if (currentPage.value > totalPages.value) {
+      currentPage.value = totalPages.value
+      if (totalMatches.value > 0) {
+        await fetchFacilities()
+      }
+    }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : 'Unexpected fetch error'
   } finally {
@@ -316,22 +309,22 @@ async function requestBrowserLocation() {
     )
   })
 
-  await fetchFacilities()
+  await fetchFacilities(true)
 }
 
 onMounted(async () => {
-  await Promise.all([fetchFacilities(), fetchIngestionStats()])
+  await Promise.all([fetchFacilities(true), fetchIngestionStats()])
 })
 </script>
 
 <template>
   <main class="trust-app">
     <section class="trust-panel trust-panel--hero">
-      <p class="trust-eyebrow">Cleanplated</p>
+      <p class="trust-eyebrow">CleanPlated</p>
       <h1 class="trust-title">Find safer food, faster.</h1>
       <p class="trust-lede">Southern California food safety data, normalized into one reliable Trust Score.</p>
 
-      <form class="trust-form" @submit.prevent="fetchFacilities">
+      <form class="trust-form" @submit.prevent="fetchFacilities(true)">
         <cv-text-input
           v-model="search"
           label="Search Directory"
@@ -390,7 +383,7 @@ onMounted(async () => {
     <section class="trust-panel">
       <header class="trust-section-head">
         <h2 class="trust-heading">Slice the data</h2>
-        <cv-tag :label="`${filteredFacilities.length} result(s)`" kind="cool-gray" />
+        <cv-tag :label="`${totalMatches.toLocaleString()} result(s)`" kind="cool-gray" />
       </header>
 
       <div class="trust-filters">
@@ -408,41 +401,21 @@ onMounted(async () => {
       </div>
 
       <div class="trust-slices">
-        <cv-button 
-          kind="ghost" 
-          :class="{ 'slice-active': scoreSlice === 'all' }" 
-          @click="scoreSlice = 'all'"
-        >
-          All ({{ facilities.length }})
+        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'all' }" @click="scoreSlice = 'all'">
+          All ({{ sliceCounts.all.toLocaleString() }})
         </cv-button>
-        <cv-button 
-          kind="ghost" 
-          :class="{ 'slice-active': scoreSlice === 'elite' }" 
-          @click="scoreSlice = 'elite'"
-        >
-          Elite ({{ scoreSlices.elite }})
+        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'elite' }" @click="scoreSlice = 'elite'">
+          Elite ({{ sliceCounts.elite.toLocaleString() }})
         </cv-button>
-        <cv-button 
-          kind="ghost" 
-          :class="{ 'slice-active': scoreSlice === 'solid' }" 
-          @click="scoreSlice = 'solid'"
-        >
-          Solid ({{ scoreSlices.solid }})
+        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'solid' }" @click="scoreSlice = 'solid'">
+          Solid ({{ sliceCounts.solid.toLocaleString() }})
         </cv-button>
-        <cv-button 
-          kind="ghost" 
-          :class="{ 'slice-active': scoreSlice === 'watch' }" 
-          @click="scoreSlice = 'watch'"
-        >
-          Watch ({{ scoreSlices.watch }})
+        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'watch' }" @click="scoreSlice = 'watch'">
+          Watch ({{ sliceCounts.watch.toLocaleString() }})
         </cv-button>
       </div>
 
-      <cv-checkbox
-        v-model="recentOnly"
-        value="recent-only"
-        label="Only show inspections from the last 90 days"
-      />
+      <cv-checkbox v-model="recentOnly" label="Only show inspections from the last 90 days" />
     </section>
 
     <section v-if="featured" class="trust-panel">
@@ -460,11 +433,11 @@ onMounted(async () => {
     <section class="trust-panel">
       <header class="trust-section-head">
         <h2 class="trust-heading">Directory</h2>
-        <cv-tag :label="`${filteredFacilities.length} result(s)`" kind="cool-gray" />
+        <cv-tag :label="`${totalMatches.toLocaleString()} result(s)`" kind="cool-gray" />
       </header>
 
-      <p v-if="filteredFacilities.length > 0" class="trust-note">
-        Showing {{ pageStart }}–{{ pageEnd }} of {{ filteredFacilities.length }}
+      <p v-if="totalMatches > 0" class="trust-note">
+        Showing {{ pageStart.toLocaleString() }}–{{ pageEnd.toLocaleString() }} of {{ totalMatches.toLocaleString() }}
       </p>
 
       <cv-inline-loading v-if="loading" state="loading" loading-text="Loading latest trust scores..." />
@@ -476,7 +449,7 @@ onMounted(async () => {
         :hide-close-button="true"
       />
       <cv-inline-notification
-        v-else-if="filteredFacilities.length === 0"
+        v-else-if="totalMatches === 0"
         kind="info"
         title="No matching facilities"
         sub-title="Try a wider radius or fewer filters."
@@ -484,7 +457,7 @@ onMounted(async () => {
       />
 
       <ul v-else class="trust-directory">
-        <li v-for="facility in paginatedFacilities" :key="facility.id" class="trust-card">
+        <li v-for="facility in facilities" :key="facility.id" class="trust-card">
           <div class="trust-card__main">
             <p class="trust-card__title">{{ facility.name }}</p>
             <p class="trust-address">{{ facility.address }}, {{ facility.city }} {{ facility.postal_code }}</p>
@@ -498,9 +471,9 @@ onMounted(async () => {
         </li>
       </ul>
 
-      <div v-if="filteredFacilities.length > 0" class="trust-pagination">
+      <div v-if="totalMatches > 0" class="trust-pagination">
         <cv-pagination
-          :number-of-items="filteredFacilities.length"
+          :number-of-items="totalMatches"
           :page="currentPage"
           :page-sizes="paginationPageSizes"
           :page-size="pageSize"
@@ -514,7 +487,7 @@ onMounted(async () => {
         <h2 class="trust-heading">Data provenance</h2>
       </header>
       <p class="trust-note">
-        Cleanplated aggregates LA County Open Data, San Diego Socrata, Long Beach public feeds,
+        CleanPlated aggregates LA County Open Data, San Diego Socrata, Long Beach public feeds,
         and Orange/Pasadena public-record or portal data, plus Riverside/San Bernardino LIVES.
       </p>
       <cv-structured-list>
@@ -538,11 +511,7 @@ onMounted(async () => {
               />
             </cv-structured-list-data>
             <cv-structured-list-data>
-              {{
-                connector.error
-                  ? 'N/A'
-                  : connector.fetched_records.toLocaleString()
-              }}
+              {{ connector.error ? 'N/A' : connector.fetched_records.toLocaleString() }}
             </cv-structured-list-data>
             <cv-structured-list-data>
               <cv-tag :label="connector.error ? 'Error' : 'Healthy'" :kind="connector.error ? 'red' : 'green'" />

@@ -15,6 +15,12 @@ pub struct FacilitySearchParams {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub radius_miles: Option<f64>,
+    pub jurisdiction: Option<String>,
+    pub sort: Option<String>,
+    pub score_slice: Option<String>,
+    pub recent_only: Option<bool>,
+    pub page: Option<usize>,
+    pub page_size: Option<usize>,
     pub limit: Option<usize>,
 }
 
@@ -42,14 +48,18 @@ pub async fn list_facilities(
             latitude: params.latitude,
             longitude: params.longitude,
             radius_miles: params.radius_miles,
+            jurisdiction: params.jurisdiction,
+            sort: params.sort,
+            score_slice: params.score_slice,
+            recent_only: params.recent_only,
+            page: params.page,
+            page_size: params.page_size,
             limit: params.limit,
         })
         .await
         .map_err(internal_error)?;
 
-    Ok(Json(
-        serde_json::json!({ "count": facilities.len(), "data": facilities }),
-    ))
+    Ok(Json(serde_json::json!(facilities)))
 }
 
 pub async fn get_facility(

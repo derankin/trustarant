@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
+
 use crate::{
-    application::dto::{FacilityDetail, FacilitySearchQuery, FacilitySummary},
+    application::dto::{
+        FacilityDetail, FacilitySearchQuery, FacilitySearchResult, FacilitySummary, ScoreSliceCounts,
+    },
     domain::{entities::Facility, repositories::FacilityRepository},
 };
 
@@ -18,7 +22,7 @@ impl DirectoryService {
     pub async fn search(
         &self,
         query: FacilitySearchQuery,
-    ) -> Result<Vec<FacilitySummary>, crate::domain::errors::RepositoryError> {
+    ) -> Result<FacilitySearchResult, crate::domain::errors::RepositoryError> {
         let mut facilities = self.repository.list().await?;
         let has_search_term = query
             .q
@@ -43,6 +47,21 @@ impl DirectoryService {
             }
         }
 
+        if let Some(jurisdiction) = query
+            .jurisdiction
+            .as_ref()
+            .map(|value| value.trim().to_ascii_lowercase())
+        {
+            if !jurisdiction.is_empty() && jurisdiction != "all" {
+                facilities.retain(|facility| {
+                    facility
+                        .jurisdiction
+                        .label()
+                        .eq_ignore_ascii_case(jurisdiction.as_str())
+                });
+            }
+        }
+
         // Search terms (name/address/ZIP) should not be constrained by the default
         // "near downtown LA" radius used for discovery mode.
         if !has_search_term {
@@ -56,50 +75,130 @@ impl DirectoryService {
             }
         }
 
-        facilities.sort_by(|left, right| {
-            right
-                .trust_score
-                .cmp(&left.trust_score)
-                .then(right.updated_at.cmp(&left.updated_at))
-        });
+        if query.recent_only.unwrap_or(false) {
+            let now = Utc::now();
+            facilities.retain(|facility| {
+                latest_inspection_at(facility)
+                    .map(|inspected_at| now.signed_duration_since(inspected_at).num_days() <= 90)
+                    .unwrap_or(false)
+            });
+        }
 
-        let limit = query.limit.unwrap_or(50).clamp(1, 2_000);
+        let slice_counts = ScoreSliceCounts {
+            all: facilities.len(),
+            elite: facilities
+                .iter()
+                .filter(|facility| facility.trust_score >= 90)
+                .count(),
+            solid: facilities
+                .iter()
+                .filter(|facility| facility.trust_score >= 80 && facility.trust_score < 90)
+                .count(),
+            watch: facilities
+                .iter()
+                .filter(|facility| facility.trust_score < 80)
+                .count(),
+        };
 
-        Ok(facilities
+        if let Some(score_slice) = query
+            .score_slice
+            .as_ref()
+            .map(|value| value.trim().to_ascii_lowercase())
+        {
+            match score_slice.as_str() {
+                "elite" => facilities.retain(|facility| facility.trust_score >= 90),
+                "solid" => {
+                    facilities
+                        .retain(|facility| facility.trust_score >= 80 && facility.trust_score < 90)
+                }
+                "watch" => facilities.retain(|facility| facility.trust_score < 80),
+                _ => {}
+            }
+        }
+
+        match query
+            .sort
+            .as_ref()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("recent_desc") => {
+                facilities.sort_by(|left, right| {
+                    latest_inspection_at(right)
+                        .cmp(&latest_inspection_at(left))
+                        .then(right.trust_score.cmp(&left.trust_score))
+                });
+            }
+            Some("name_asc") => {
+                facilities.sort_by(|left, right| left.name.cmp(&right.name));
+            }
+            _ => {
+                facilities.sort_by(|left, right| {
+                    right
+                        .trust_score
+                        .cmp(&left.trust_score)
+                        .then(right.updated_at.cmp(&left.updated_at))
+                });
+            }
+        }
+
+        let page_size = query
+            .page_size
+            .or(query.limit)
+            .unwrap_or(50)
+            .clamp(1, 200);
+        let page = query.page.unwrap_or(1).max(1);
+        let total_count = facilities.len();
+        let offset = (page - 1).saturating_mul(page_size);
+        let data = facilities
             .into_iter()
-            .take(limit)
+            .skip(offset)
+            .take(page_size)
             .map(to_summary)
-            .collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+
+        Ok(FacilitySearchResult {
+            count: data.len(),
+            total_count,
+            data,
+            page,
+            page_size,
+            slice_counts,
+        })
     }
 
-    pub async fn get(
+pub async fn get(
         &self,
         id: &str,
     ) -> Result<Option<FacilityDetail>, crate::domain::errors::RepositoryError> {
         let facility = self.repository.get_by_id(id).await?;
 
-        Ok(facility.map(|facility| FacilityDetail {
-            id: facility.id,
-            source_id: facility.source_id,
-            name: facility.name,
-            address: facility.address,
-            city: facility.city,
-            state: facility.state,
-            postal_code: facility.postal_code,
-            latitude: facility.latitude,
-            longitude: facility.longitude,
-            jurisdiction: facility.jurisdiction.label().to_string(),
-            trust_score: facility.trust_score,
-            inspections_count: facility.inspections.len(),
-            latest_inspection_at: facility
-                .inspections
-                .first()
-                .map(|inspection| inspection.inspected_at),
+        Ok(facility.map(|facility| {
+            let latest_inspection_at = latest_inspection_at(&facility);
+            let inspections_count = facility.inspections.len();
+
+            FacilityDetail {
+                id: facility.id,
+                source_id: facility.source_id,
+                name: facility.name,
+                address: facility.address,
+                city: facility.city,
+                state: facility.state,
+                postal_code: facility.postal_code,
+                latitude: facility.latitude,
+                longitude: facility.longitude,
+                jurisdiction: facility.jurisdiction.label().to_string(),
+                trust_score: facility.trust_score,
+                inspections_count,
+                latest_inspection_at,
+            }
         }))
     }
 }
 
 fn to_summary(facility: Facility) -> FacilitySummary {
+    let latest_inspection_at = latest_inspection_at(&facility);
+
     FacilitySummary {
         id: facility.id,
         name: facility.name,
@@ -111,11 +210,16 @@ fn to_summary(facility: Facility) -> FacilitySummary {
         longitude: facility.longitude,
         jurisdiction: facility.jurisdiction.label().to_string(),
         trust_score: facility.trust_score,
-        latest_inspection_at: facility
-            .inspections
-            .first()
-            .map(|inspection| inspection.inspected_at),
+        latest_inspection_at,
     }
+}
+
+fn latest_inspection_at(facility: &Facility) -> Option<DateTime<Utc>> {
+    facility
+        .inspections
+        .iter()
+        .map(|inspection| inspection.inspected_at)
+        .max()
 }
 
 fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
