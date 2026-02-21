@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     collections::hash_map::DefaultHasher,
     env,
     hash::{Hash, Hasher},
@@ -19,12 +20,16 @@ use crate::{
 
 const DEFAULT_TIMEOUT_SECS: u64 = 20;
 const DEFAULT_BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-const DEFAULT_OC_LIVE_ENDPOINT: &str = "https://inspections.myhealthdepartment.com/genericEndpoint";
-const DEFAULT_OC_LIVE_REFERER: &str =
+const DEFAULT_OC_LIVE_ENDPOINT: &str = "https://inspections.myhealthdepartment.com/";
+const DEFAULT_OC_LIVE_PATH: &str = "orange-county-back-li";
+const DEFAULT_OC_LIVE_LEGACY_ENDPOINT: &str =
+    "https://inspections.myhealthdepartment.com/genericEndpoint";
+const DEFAULT_OC_LIVE_LEGACY_REFERER: &str =
     "https://inspections.myhealthdepartment.com/orange-county/restaurant-closures";
-const DEFAULT_OC_LIVE_PAGE_SIZE: usize = 70;
-const DEFAULT_OC_LIVE_MAX_RECORDS: usize = 10_000;
-const DEFAULT_OC_LIVE_DAYS_WINDOW: u32 = 60;
+const DEFAULT_OC_LIVE_PAGE_SIZE: usize = 25;
+const DEFAULT_OC_LIVE_MAX_RECORDS: usize = 30_000;
+const DEFAULT_OC_LIVE_PER_TERM_MAX_RECORDS: usize = 20_000;
+const DEFAULT_OC_LIVE_DAYS_WINDOW: u32 = 3_650;
 const DEFAULT_PASADENA_DIRECTORY_URL: &str = "https://services2.arcgis.com/zNjnZafDYCAJAbN0/arcgis/rest/services/Pasadena_Restaurant_Directory/FeatureServer/0";
 const DEFAULT_PASADENA_PAGE_SIZE: usize = 200;
 const DEFAULT_PASADENA_MAX_RECORDS: usize = 5_000;
@@ -36,8 +41,11 @@ pub struct CpraConnector {
     pasadena_url: Option<String>,
     oc_live_enabled: bool,
     oc_live_endpoint: String,
+    oc_live_path: String,
+    oc_live_search_terms: Vec<String>,
     oc_live_page_size: usize,
     oc_live_max_records: usize,
+    oc_live_per_term_max_records: usize,
     oc_live_days_window: u32,
     pasadena_live_enabled: bool,
     pasadena_directory_url: String,
@@ -72,6 +80,15 @@ impl CpraConnector {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| DEFAULT_OC_LIVE_ENDPOINT.to_owned());
+        let oc_live_path = env::var("TRUSTARANT_OC_LIVE_PATH")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_OC_LIVE_PATH.to_owned());
+        let oc_live_search_terms = parse_search_terms(
+            env::var("TRUSTARANT_OC_LIVE_SEARCH_TERMS").ok(),
+            default_orange_county_search_terms(),
+        );
         let oc_live_page_size = env::var("TRUSTARANT_OC_LIVE_PAGE_SIZE")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -80,6 +97,10 @@ impl CpraConnector {
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_OC_LIVE_MAX_RECORDS);
+        let oc_live_per_term_max_records = env::var("TRUSTARANT_OC_LIVE_PER_TERM_MAX_RECORDS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_OC_LIVE_PER_TERM_MAX_RECORDS);
         let oc_live_days_window = env::var("TRUSTARANT_OC_LIVE_DAYS_WINDOW")
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
@@ -102,6 +123,7 @@ impl CpraConnector {
 
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
+            .cookie_store(true)
             .user_agent(DEFAULT_BROWSER_UA)
             .build()
             .unwrap_or_else(|_| Client::new());
@@ -112,8 +134,11 @@ impl CpraConnector {
             pasadena_url,
             oc_live_enabled,
             oc_live_endpoint,
+            oc_live_path,
+            oc_live_search_terms,
             oc_live_page_size,
             oc_live_max_records,
+            oc_live_per_term_max_records,
             oc_live_days_window,
             pasadena_live_enabled,
             pasadena_directory_url,
@@ -172,132 +197,181 @@ impl CpraConnector {
     }
 
     async fn fetch_orange_county_live(&self) -> Result<Vec<SourceFacilityInput>> {
-        let page_size = self.oc_live_page_size.clamp(1, 500);
+        let page_size = self.oc_live_page_size.clamp(1, 250);
         let max_records = self.oc_live_max_records.max(1);
+        let max_per_term = self.oc_live_per_term_max_records.max(page_size);
+        let base_page_url = format!(
+            "https://inspections.myhealthdepartment.com/{}",
+            self.oc_live_path
+        );
 
-        let inspection_purposes = [
-            "Inspection (Non-Routine)",
-            "Notice of Violation Reinspection",
-            "Reinspection",
-            "Routine Inspection",
-        ];
+        let _ = self
+            .client
+            .get(&base_page_url)
+            .send()
+            .await
+            .with_context(|| {
+                format!("Orange County live bootstrap request failed: {base_page_url}")
+            })?
+            .error_for_status()
+            .context("Orange County live bootstrap returned non-success status")?;
 
         let mut rows = Vec::new();
-        let mut page = 1usize;
-        let mut total_available = usize::MAX;
+        let mut seen_inspections = HashSet::new();
 
-        while rows.len() < max_records && ((page - 1) * page_size) < total_available {
-            let filter_by_val = json!([
-                ["CLOSED", "CLOSED-OPERATOR INITIATED"],
-                [self.oc_live_days_window.to_string(), "0"],
-                ["Retail Food Facility Inspection"],
-                inspection_purposes
-            ])
-            .to_string();
+        for term in &self.oc_live_search_terms {
+            if rows.len() >= max_records {
+                break;
+            }
 
-            let payload = json!({
-                "jurisdictionPath": "orange-county",
-                "requestType": "inspclosures",
-                "rows": page_size,
-                "page": page,
-                "searchTerm": "",
-                "filterBySrc": "[\"This_Form\", \"This_Form\", \"Inspection_Type\",\"This_Form\"]",
-                "filterByAct": "[\"EQUAL\", \"BETWEEN\", \"EQUAL\", \"EQUAL\"]",
-                "filterByCol": "[\"result\", \"inspectionDate\", \"type\", \"InspectionTypeMRS\"]",
-                "filterByVal": filter_by_val,
-                "sort": "This_Form.inspectionDate|DESC",
-            });
+            let mut start = 0usize;
+            let baseline_rows = rows.len();
+            loop {
+                if rows.len() >= max_records || start >= max_per_term {
+                    break;
+                }
 
-            let mut last_error = None;
-            let mut response = None;
+                let payload = json!({
+                    "data": {
+                        "path": self.oc_live_path,
+                        "searchStr": term,
+                        "programName": "",
+                        "filters": {},
+                        "start": start,
+                        "count": page_size,
+                        "returnHtml": false,
+                        "lat": "0",
+                        "lng": "0",
+                        "sort": {}
+                    },
+                    "task": "searchInspections"
+                });
 
-            for _attempt in 1..=3 {
-                match self
+                let response = self
                     .client
                     .post(&self.oc_live_endpoint)
                     .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
                     .header(reqwest::header::ORIGIN, "https://inspections.myhealthdepartment.com")
-                    .header(reqwest::header::REFERER, DEFAULT_OC_LIVE_REFERER)
+                    .header(reqwest::header::REFERER, &base_page_url)
                     .header("X-Requested-With", "XMLHttpRequest")
                     .json(&payload)
                     .send()
                     .await
-                {
-                    Ok(result) => match result.error_for_status() {
-                        Ok(ok) => match ok.json::<Value>().await {
-                            Ok(value) => {
-                                response = Some(value);
-                                break;
-                            }
-                            Err(error) => {
-                                last_error =
-                                    Some(anyhow::anyhow!("Orange County JSON parse failed: {error}"));
-                            }
-                        },
-                        Err(error) => {
-                            last_error =
-                                Some(anyhow::anyhow!("Orange County non-success status: {error}"));
-                        }
-                    },
-                    Err(error) => {
-                        last_error = Some(anyhow::anyhow!("Orange County request failed: {error}"));
-                    }
-                }
-            }
+                    .with_context(|| {
+                        format!(
+                            "Orange County live request failed (term='{term}', start={start})"
+                        )
+                    })?
+                    .error_for_status()
+                    .with_context(|| {
+                        format!(
+                            "Orange County live returned non-success status (term='{term}', start={start})"
+                        )
+                    })?;
 
-            let Some(response) = response else {
-                let reason = last_error
-                    .map(|error| format!("{error:#}"))
-                    .unwrap_or_else(|| "unknown error".to_owned());
-                anyhow::bail!("Orange County live portal retries exhausted: {reason}");
-            };
-
-            if response
-                .get("error")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                let message = response
-                    .get("msg")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown live portal error");
-                anyhow::bail!("Orange County live portal returned error: {message}");
-            }
-
-            total_available = response
-                .pointer("/data/availableRows")
-                .and_then(Value::as_u64)
-                .map(|value| value as usize)
-                .unwrap_or(total_available);
-
-            let Some(data) = response.pointer("/data/DATA").and_then(Value::as_array) else {
-                break;
-            };
-
-            if data.is_empty() {
-                break;
-            }
-
-            for item in data {
-                if rows.len() >= max_records {
+                let body = response
+                    .text()
+                    .await
+                    .context("Orange County live response body read failed")?;
+                if body.trim().is_empty() {
                     break;
                 }
 
-                if let Some(record) = item.as_object().cloned() {
-                    rows.push(record);
+                let parsed = parse_json_relaxed(&body).with_context(|| {
+                    format!("Orange County live JSON parse failed (term='{term}')")
+                })?;
+                let Some(items) = parsed.as_array() else {
+                    break;
+                };
+                if items.is_empty() {
+                    break;
                 }
+
+                let mut added_this_page = 0usize;
+                for item in items {
+                    let Some(record) = item.as_object().cloned() else {
+                        continue;
+                    };
+
+                    let Some(source_id) = rec_string(
+                        &record,
+                        &[
+                            "inspectionID",
+                            "permitID",
+                            "permitNumber",
+                            "inspectionId",
+                            "id",
+                        ],
+                    ) else {
+                        continue;
+                    };
+
+                    if !seen_inspections.insert(source_id) {
+                        continue;
+                    }
+
+                    rows.push(record);
+                    added_this_page += 1;
+
+                    if rows.len() >= max_records {
+                        break;
+                    }
+                }
+
+                if added_this_page == 0 {
+                    break;
+                }
+                start += items.len();
             }
 
-            if data.len() < page_size {
-                break;
-            }
-            page += 1;
+            tracing::info!(
+                source = "cpra_import_orange_pasadena",
+                jurisdiction = "orange_county",
+                term = term,
+                fetched = rows.len().saturating_sub(baseline_rows),
+                total = rows.len(),
+                "Orange County live crawl term completed"
+            );
         }
+
+        if let Ok(legacy_rows) = self.fetch_orange_county_live_closures_legacy().await {
+            for record in legacy_rows {
+                let source_id = rec_string(
+                    &record,
+                    &[
+                        "inspectionID",
+                        "permitID",
+                        "permitNumber",
+                        "inspectionId",
+                        "id",
+                    ],
+                )
+                .or_else(|| rec_string(&record, &["source_id"]))
+                .unwrap_or_default();
+
+                if !source_id.is_empty() && !seen_inspections.insert(source_id) {
+                    continue;
+                }
+                rows.push(record);
+                if rows.len() >= max_records {
+                    break;
+                }
+            }
+        }
+
+        tracing::info!(
+            source = "cpra_import_orange_pasadena",
+            jurisdiction = "orange_county",
+            total = rows.len(),
+            "Orange County live crawl completed"
+        );
 
         Ok(rows
             .into_iter()
             .enumerate()
-            .filter_map(|(idx, record)| map_record(record, Jurisdiction::OrangeCounty, "oc-live", idx))
+            .filter_map(|(idx, record)| {
+                map_record(record, Jurisdiction::OrangeCounty, "oc-live", idx)
+            })
             .collect::<Vec<_>>())
     }
 
@@ -310,11 +384,7 @@ impl CpraConnector {
         let count_response: Value = self
             .client
             .get(&query_url)
-            .query(&[
-                ("where", "1=1"),
-                ("returnCountOnly", "true"),
-                ("f", "json"),
-            ])
+            .query(&[("where", "1=1"), ("returnCountOnly", "true"), ("f", "json")])
             .send()
             .await
             .context("Pasadena directory count request failed")?
@@ -373,7 +443,11 @@ impl CpraConnector {
                     break;
                 }
 
-                let Some(mut attributes) = feature.get("attributes").and_then(Value::as_object).cloned() else {
+                let Some(mut attributes) = feature
+                    .get("attributes")
+                    .and_then(Value::as_object)
+                    .cloned()
+                else {
                     continue;
                 };
 
@@ -395,13 +469,121 @@ impl CpraConnector {
             offset += request_count;
         }
 
+        tracing::info!(
+            source = "cpra_import_orange_pasadena",
+            jurisdiction = "pasadena",
+            total = rows.len(),
+            "Pasadena live directory crawl completed"
+        );
+
         Ok(rows
             .into_iter()
             .enumerate()
-            .filter_map(|(idx, record)| {
-                map_record(record, Jurisdiction::Pasadena, "pas-live", idx)
-            })
+            .filter_map(|(idx, record)| map_record(record, Jurisdiction::Pasadena, "pas-live", idx))
             .collect::<Vec<_>>())
+    }
+
+    async fn fetch_orange_county_live_closures_legacy(&self) -> Result<Vec<Map<String, Value>>> {
+        let page_size = self.oc_live_page_size.clamp(1, 200);
+        let max_records = self.oc_live_max_records.max(1);
+        let inspection_purposes = [
+            "Inspection (Non-Routine)",
+            "Notice of Violation Reinspection",
+            "Reinspection",
+            "Routine Inspection",
+        ];
+
+        let mut rows = Vec::new();
+        let mut page = 1usize;
+        let mut total_available = usize::MAX;
+
+        while rows.len() < max_records && ((page - 1) * page_size) < total_available {
+            let filter_by_val = json!([
+                ["CLOSED", "CLOSED-OPERATOR INITIATED"],
+                [self.oc_live_days_window.to_string(), "0"],
+                ["Retail Food Facility Inspection"],
+                inspection_purposes
+            ])
+            .to_string();
+
+            let payload = json!({
+                "jurisdictionPath": self.oc_live_path,
+                "requestType": "inspclosures",
+                "rows": page_size,
+                "page": page,
+                "searchTerm": "",
+                "filterBySrc": "[\"This_Form\", \"This_Form\", \"Inspection_Type\",\"This_Form\"]",
+                "filterByAct": "[\"EQUAL\", \"BETWEEN\", \"EQUAL\", \"EQUAL\"]",
+                "filterByCol": "[\"result\", \"inspectionDate\", \"type\", \"InspectionTypeMRS\"]",
+                "filterByVal": filter_by_val,
+                "sort": "This_Form.inspectionDate|DESC",
+            });
+
+            let response = self
+                .client
+                .post(DEFAULT_OC_LIVE_LEGACY_ENDPOINT)
+                .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
+                .header(
+                    reqwest::header::ORIGIN,
+                    "https://inspections.myhealthdepartment.com",
+                )
+                .header(reqwest::header::REFERER, DEFAULT_OC_LIVE_LEGACY_REFERER)
+                .header("X-Requested-With", "XMLHttpRequest")
+                .json(&payload)
+                .send()
+                .await
+                .with_context(|| {
+                    format!("Orange County legacy closures request failed (page={page})")
+                })?
+                .error_for_status()
+                .with_context(|| {
+                    format!("Orange County legacy closures non-success status (page={page})")
+                })?;
+
+            let body = response
+                .text()
+                .await
+                .context("Orange County legacy closures body read failed")?;
+            let parsed = parse_json_relaxed(&body)
+                .context("Orange County legacy closures JSON parse failed")?;
+
+            if parsed
+                .get("error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                break;
+            }
+
+            total_available = parsed
+                .pointer("/data/availableRows")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(total_available);
+
+            let Some(data) = parsed.pointer("/data/DATA").and_then(Value::as_array) else {
+                break;
+            };
+            if data.is_empty() {
+                break;
+            }
+
+            for item in data {
+                if rows.len() >= max_records {
+                    break;
+                }
+                if let Some(record) = item.as_object().cloned() {
+                    rows.push(record);
+                }
+            }
+
+            if data.len() < page_size {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(rows)
     }
 }
 
@@ -457,7 +639,10 @@ impl HealthDataConnector for CpraConnector {
                 anyhow::bail!("CPRA connector fetched zero records from all enabled sources");
             }
 
-            anyhow::bail!("CPRA connector failed across all enabled sources: {}", errors.join(" | "));
+            anyhow::bail!(
+                "CPRA connector failed across all enabled sources: {}",
+                errors.join(" | ")
+            );
         }
 
         Ok(facilities)
@@ -530,6 +715,81 @@ fn parse_csv_records(body: &str) -> Result<Vec<Map<String, Value>>> {
     Ok(records)
 }
 
+fn parse_json_relaxed(body: &str) -> Result<Value> {
+    serde_json::from_str(body).or_else(|error| {
+        let sanitized = sanitize_json_control_chars(body);
+        serde_json::from_str(&sanitized).with_context(|| {
+            format!("unable to parse raw JSON ({error}) and sanitized JSON fallback")
+        })
+    })
+}
+
+fn sanitize_json_control_chars(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                output.push(ch);
+                continue;
+            }
+
+            match ch {
+                '\\' => {
+                    escaped = true;
+                    output.push(ch);
+                }
+                '"' => {
+                    in_string = false;
+                    output.push(ch);
+                }
+                '\n' => output.push_str("\\n"),
+                '\r' => output.push_str("\\r"),
+                '\t' => output.push_str("\\t"),
+                c if c.is_control() => {
+                    let mut encoded = String::with_capacity(6);
+                    use std::fmt::Write;
+                    let _ = write!(&mut encoded, "\\u{:04x}", c as u32);
+                    output.push_str(&encoded);
+                }
+                _ => output.push(ch),
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+        }
+        output.push(ch);
+    }
+
+    output
+}
+
+fn parse_search_terms(raw: Option<String>, default_terms: Vec<String>) -> Vec<String> {
+    raw.map(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|term| !term.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
+    })
+    .filter(|terms| !terms.is_empty())
+    .unwrap_or(default_terms)
+}
+
+fn default_orange_county_search_terms() -> Vec<String> {
+    let mut terms = Vec::with_capacity(1 + 26 + 10);
+    terms.push(String::new());
+    terms.extend(('a'..='z').map(|ch| ch.to_string()));
+    terms.extend(('0'..='9').map(|ch| ch.to_string()));
+    terms
+}
+
 fn map_record(
     record: Map<String, Value>,
     jurisdiction: Jurisdiction,
@@ -544,6 +804,7 @@ fn map_record(
             "name",
             "record_name",
             "business_name",
+            "establishmentName",
             "permitName",
             "PR_Estabname",
             "CERS_Estab_LKPname",
