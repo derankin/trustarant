@@ -110,75 +110,79 @@ impl LivesBatchConnector {
                 })?
                 .json::<ArcGisResponse>()
                 .await
-                .with_context(|| format!("{} ArcGIS response parse failed", jurisdiction.label()))?;
+                .with_context(|| {
+                    format!("{} ArcGIS response parse failed", jurisdiction.label())
+                })?;
 
             let page_count = response.features.len();
             let page_start = facilities.len();
 
-            facilities.extend(response.features.into_iter().enumerate().filter_map(|(idx, feature)| {
-                let attrs = feature.attributes;
+            facilities.extend(response.features.into_iter().enumerate().filter_map(
+                |(idx, feature)| {
+                    let attrs = feature.attributes;
 
-                let name = attr_string(&attrs, &["Facility_Name", "FACILITY_NAME", "name"])?;
-                let source_id = attr_string(
-                    &attrs,
-                    &[
-                        "Facility_ID",
-                        "FACILITY_ID",
-                        "Permit_Number",
-                        "permit_number",
-                        "id",
-                    ],
-                )
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| format!("{id_prefix}-{}", page_start + idx));
-
-                let city = attr_string(&attrs, &["City", "CITY", "city"])
-                    .unwrap_or_else(|| jurisdiction.label().to_owned());
-                let state = attr_string(&attrs, &["State", "STATE", "state"])
-                    .unwrap_or_else(|| "CA".to_owned());
-                let postal_code =
-                    attr_string(&attrs, &["Zip", "ZIP", "zip", "postal_code"]).unwrap_or_default();
-
-                let latitude = attr_f64(&attrs, &["Latitude", "LATITUDE", "latitude"])
-                    .unwrap_or(default_coordinates.0);
-                let longitude = attr_f64(&attrs, &["Longitude", "LONGITUDE", "longitude"])
-                    .unwrap_or(default_coordinates.1);
-
-                let raw_score =
-                    attr_f64(&attrs, &["Score", "SCORE", "score"]).map(|score| score as f32);
-                let letter_grade = raw_score.and_then(score_to_grade);
-                let inspected_at = attr_datetime(
-                    &attrs,
-                    &[
-                        "Inspection_Date",
-                        "INSPECTION_DATE",
-                        "inspection_date",
-                        "ACTIVITY_DATE",
-                    ],
-                )
-                .unwrap_or_else(Utc::now);
-
-                Some(SourceFacilityInput {
-                    source_id,
-                    name,
-                    address: attr_string(
+                    let name = attr_string(&attrs, &["Facility_Name", "FACILITY_NAME", "name"])?;
+                    let source_id = attr_string(
                         &attrs,
-                        &["Address", "FACILITY_ADDRESS", "address", "StreetAddress"],
+                        &[
+                            "Facility_ID",
+                            "FACILITY_ID",
+                            "Permit_Number",
+                            "permit_number",
+                            "id",
+                        ],
                     )
-                    .unwrap_or_default(),
-                    city,
-                    state,
-                    postal_code,
-                    latitude,
-                    longitude,
-                    jurisdiction: jurisdiction.clone(),
-                    inspected_at,
-                    raw_score,
-                    letter_grade,
-                    placard_status: None,
-                    violations: Vec::new(),
-                })
-            }));
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| format!("{id_prefix}-{}", page_start + idx));
+
+                    let city = attr_string(&attrs, &["City", "CITY", "city"])
+                        .unwrap_or_else(|| jurisdiction.label().to_owned());
+                    let state = attr_string(&attrs, &["State", "STATE", "state"])
+                        .unwrap_or_else(|| "CA".to_owned());
+                    let postal_code = attr_string(&attrs, &["Zip", "ZIP", "zip", "postal_code"])
+                        .unwrap_or_default();
+
+                    let latitude = attr_f64(&attrs, &["Latitude", "LATITUDE", "latitude"])
+                        .unwrap_or(default_coordinates.0);
+                    let longitude = attr_f64(&attrs, &["Longitude", "LONGITUDE", "longitude"])
+                        .unwrap_or(default_coordinates.1);
+
+                    let raw_score =
+                        attr_f64(&attrs, &["Score", "SCORE", "score"]).map(|score| score as f32);
+                    let letter_grade = raw_score.and_then(score_to_grade);
+                    let inspected_at = attr_datetime(
+                        &attrs,
+                        &[
+                            "Inspection_Date",
+                            "INSPECTION_DATE",
+                            "inspection_date",
+                            "ACTIVITY_DATE",
+                        ],
+                    )
+                    .unwrap_or_else(Utc::now);
+
+                    Some(SourceFacilityInput {
+                        source_id,
+                        name,
+                        address: attr_string(
+                            &attrs,
+                            &["Address", "FACILITY_ADDRESS", "address", "StreetAddress"],
+                        )
+                        .unwrap_or_default(),
+                        city,
+                        state,
+                        postal_code,
+                        latitude,
+                        longitude,
+                        jurisdiction: jurisdiction.clone(),
+                        inspected_at,
+                        raw_score,
+                        letter_grade,
+                        placard_status: None,
+                        violations: Vec::new(),
+                    })
+                },
+            ));
 
             if let Some(max_records) = self.max_records {
                 if facilities.len() >= max_records {

@@ -1,7 +1,7 @@
-# Trustarant Research: Southern California Food Safety Data Strategy
+# Trustaraunt Research: Southern California Food Safety Data Strategy
 
 ## Objective
-Trustarant is a mobile-first directory that unifies fragmented Southern California food inspection datasets into one searchable product with a normalized 0-100 Trust Score.
+Trustaraunt is a mobile-first directory that unifies fragmented Southern California food inspection datasets into one searchable product with a normalized 0-100 Trust Score.
 
 ## Regional Problem
 Food safety data is distributed across county and city systems with different formats, update frequencies, and access patterns. A single product experience requires:

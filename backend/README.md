@@ -1,4 +1,4 @@
-# Trustarant Backend (Rust + Clean Architecture)
+# Trustaraunt Backend (Rust + Clean Architecture)
 
 This backend is structured around clean architecture boundaries:
 

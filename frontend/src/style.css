@@ -1,22 +1,12 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Public+Sans:wght@400;500;600;700&display=swap');
-@import "tailwindcss";
-
-@theme {
-  --font-display: "Fraunces", serif;
-  --font-sans: "Public Sans", sans-serif;
-
-  --color-ink-950: #12100c;
-  --color-ink-900: #1d1811;
-  --color-clay-600: #9f5e2e;
-  --color-clay-500: #bc733b;
-  --color-cream-200: #f6efe4;
-  --color-cream-300: #ede2cf;
-  --color-mint-500: #3b7f6e;
-  --color-alert-500: #b73d2f;
-}
+@import '@carbon/styles/css/styles.css';
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 
 :root {
-  color: var(--color-ink-950);
+  --trust-bg: #f4f4f4;
+  --trust-surface: #ffffff;
+  --trust-border: #dcdcdc;
+  --trust-accent: #005d5d;
+  --trust-text-muted: #525252;
 }
 
 html,
@@ -27,9 +17,184 @@ body,
 
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at 5% -10%, #ffefd2 0, transparent 45%),
-    radial-gradient(circle at 95% 0%, #ffd6a6 0, transparent 35%),
-    linear-gradient(180deg, #fffaf2 0%, #f6efe4 100%);
-  font-family: var(--font-sans);
+  background: radial-gradient(circle at 0% 0%, #e8f0ef, transparent 40%), var(--trust-bg);
+  font-family: 'IBM Plex Sans', sans-serif;
+  color: #161616;
+}
+
+.trust-shell {
+  margin: 0 auto;
+  max-width: 1100px;
+  padding: 1rem 0.75rem 3rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.trust-hero {
+  background: linear-gradient(130deg, #ffffff 0%, #f5faf9 100%);
+}
+
+.trust-eyebrow {
+  margin: 0 0 0.75rem;
+  font-family: 'Fraunces', serif;
+  font-size: 0.85rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--trust-accent);
+}
+
+.cds--productive-heading-05,
+.cds--productive-heading-03,
+.cds--productive-heading-04 {
+  font-family: 'Fraunces', serif;
+}
+
+.trust-search {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.trust-btn {
+  width: 100%;
+  max-width: none;
+  justify-content: center;
+}
+
+.trust-actions {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.trust-note {
+  color: var(--trust-text-muted);
+}
+
+.trust-range {
+  width: 100%;
+  margin-top: 0.5rem;
+  accent-color: var(--trust-accent);
+}
+
+.trust-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.trust-stat-tile {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.trust-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.trust-filters {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.trust-slices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.trust-slice-btn {
+  justify-content: space-between;
+  padding-inline: 0.75rem;
+}
+
+.trust-checkbox {
+  margin-top: 0.75rem;
+}
+
+.trust-inline-tags {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.trust-error {
+  background: #fff1f1;
+  border: 1px solid #ffd7d9;
+  color: #a2191f;
+  padding: 0.75rem;
+}
+
+.trust-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.trust-list-item {
+  border: 1px solid var(--trust-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  background: var(--trust-surface);
+}
+
+.trust-list-title {
+  font-weight: 600;
+  margin: 0;
+}
+
+.trust-connectors {
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.trust-connector-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--trust-border);
+  background: var(--trust-surface);
+}
+
+@media (min-width: 700px) {
+  .trust-shell {
+    padding: 1.5rem 1rem 4rem;
+    gap: 1rem;
+  }
+
+  .trust-search {
+    grid-template-columns: 1fr auto;
+    align-items: end;
+  }
+
+  .trust-search .trust-btn {
+    width: auto;
+  }
+
+  .trust-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trust-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trust-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trust-slices {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }

@@ -45,7 +45,7 @@ impl LongBeachConnector {
             .timeout(Duration::from_secs(timeout_secs))
             .http1_only()
             .danger_accept_invalid_certs(true)
-            .user_agent("TrustarantBot/1.0 (+https://trustarant.com)")
+            .user_agent("TrustarauntBot/1.0 (+https://trustaraunt.com)")
             .build()
             .unwrap_or_else(|_| Client::new());
 

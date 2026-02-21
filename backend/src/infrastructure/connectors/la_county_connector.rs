@@ -84,10 +84,7 @@ impl LaCountyConnector {
                 ("where".to_owned(), where_clause.to_owned()),
                 ("outFields".to_owned(), out_fields.to_owned()),
                 ("resultOffset".to_owned(), offset.to_string()),
-                (
-                    "resultRecordCount".to_owned(),
-                    self.page_size.to_string(),
-                ),
+                ("resultRecordCount".to_owned(), self.page_size.to_string()),
                 ("f".to_owned(), "json".to_owned()),
             ];
             if let Some(order_by) = order_by_fields {

@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = format!("{}:{}", settings.host, settings.port).parse()?;
     let listener = TcpListener::bind(addr).await?;
 
-    info!(address = %addr, "Trustarant backend listening");
+    info!(address = %addr, "Trustaraunt backend listening");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
