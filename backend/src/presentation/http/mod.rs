@@ -1,12 +1,16 @@
 pub mod handlers;
+pub mod rate_limit;
 pub mod routes;
 
 use std::sync::Arc;
 
-use crate::application::services::{DirectoryService, IngestionService};
+use crate::application::services::{DirectoryService, IngestionService, VoteService};
+use crate::presentation::http::rate_limit::VoteRateLimiter;
 
 #[derive(Clone)]
 pub struct AppState {
     pub directory_service: Arc<DirectoryService>,
     pub ingestion_service: Arc<IngestionService>,
+    pub vote_service: Arc<VoteService>,
+    pub vote_rate_limiter: VoteRateLimiter,
 }

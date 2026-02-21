@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, postgres::PgPoolOptions};
 
 use crate::domain::{
     entities::{
-        ConnectorIngestionStatus, Facility, Inspection, Jurisdiction, SystemIngestionStatus,
+        ConnectorIngestionStatus, Facility, FacilityVoteSummary, Inspection, Jurisdiction,
+        SystemIngestionStatus, VoteValue,
     },
     errors::RepositoryError,
     repositories::FacilityRepository,
@@ -69,6 +72,31 @@ impl PostgresFacilityRepository {
                 unique_facilities BIGINT NOT NULL,
                 connector_stats JSONB NOT NULL
             )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(to_repository_error)?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS facility_votes (
+                facility_id TEXT NOT NULL,
+                voter_key TEXT NOT NULL,
+                vote SMALLINT NOT NULL CHECK (vote IN (-1, 1)),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (facility_id, voter_key)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(to_repository_error)?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_facility_votes_facility_id
+            ON facility_votes (facility_id)
             "#,
         )
         .execute(&self.pool)
@@ -205,6 +233,76 @@ impl FacilityRepository for PostgresFacilityRepository {
                 })
             })
             .transpose()
+    }
+
+    async fn upsert_facility_vote(
+        &self,
+        facility_id: &str,
+        voter_key: &str,
+        vote: VoteValue,
+    ) -> Result<FacilityVoteSummary, RepositoryError> {
+        sqlx::query(
+            r#"
+            INSERT INTO facility_votes (facility_id, voter_key, vote, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (facility_id, voter_key)
+            DO UPDATE SET
+                vote = EXCLUDED.vote,
+                updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(facility_id)
+        .bind(voter_key)
+        .bind(vote.to_i16())
+        .execute(&self.pool)
+        .await
+        .map_err(to_repository_error)?;
+
+        let summaries = self
+            .get_facility_vote_summaries(&[facility_id.to_owned()])
+            .await?;
+        Ok(summaries.get(facility_id).cloned().unwrap_or_default())
+    }
+
+    async fn get_facility_vote_summaries(
+        &self,
+        facility_ids: &[String],
+    ) -> Result<HashMap<String, FacilityVoteSummary>, RepositoryError> {
+        if facility_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                facility_id,
+                COALESCE(SUM(CASE WHEN vote = 1 THEN 1 ELSE 0 END), 0) AS likes,
+                COALESCE(SUM(CASE WHEN vote = -1 THEN 1 ELSE 0 END), 0) AS dislikes
+            FROM facility_votes
+            WHERE facility_id = ANY($1)
+            GROUP BY facility_id
+            "#,
+        )
+        .bind(facility_ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(to_repository_error)?;
+
+        let mut summaries = HashMap::new();
+        for row in rows {
+            let facility_id: String = row.get("facility_id");
+            let likes: i64 = row.get("likes");
+            let dislikes: i64 = row.get("dislikes");
+            summaries.insert(
+                facility_id,
+                FacilityVoteSummary {
+                    likes: likes.max(0) as u64,
+                    dislikes: dislikes.max(0) as u64,
+                },
+            );
+        }
+
+        Ok(summaries)
     }
 }
 

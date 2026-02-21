@@ -99,3 +99,30 @@ pub struct SystemIngestionStatus {
     pub unique_facilities: usize,
     pub connector_stats: Vec<ConnectorIngestionStatus>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VoteValue {
+    Like,
+    Dislike,
+}
+
+impl VoteValue {
+    pub fn to_i16(&self) -> i16 {
+        match self {
+            Self::Like => 1,
+            Self::Dislike => -1,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct FacilityVoteSummary {
+    pub likes: u64,
+    pub dislikes: u64,
+}
+
+impl FacilityVoteSummary {
+    pub fn score(&self) -> i64 {
+        self.likes as i64 - self.dislikes as i64
+    }
+}

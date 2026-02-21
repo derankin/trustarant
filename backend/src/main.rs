@@ -4,9 +4,9 @@ mod domain;
 mod infrastructure;
 mod presentation;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use application::services::{DirectoryService, IngestionService, TrustScoreService};
+use application::services::{DirectoryService, IngestionService, TrustScoreService, VoteService};
 use axum::Router;
 use config::{RunMode, Settings};
 use domain::repositories::FacilityRepository;
@@ -15,7 +15,7 @@ use infrastructure::{
     repositories::{InMemoryFacilityRepository, PostgresFacilityRepository},
     scheduler,
 };
-use presentation::http::{AppState, routes::build_router};
+use presentation::http::{AppState, rate_limit::VoteRateLimiter, routes::build_router};
 use tokio::net::TcpListener;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info, warn};
@@ -69,15 +69,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let app_state = AppState {
-        directory_service: Arc::new(DirectoryService::new(repository)),
+        directory_service: Arc::new(DirectoryService::new(repository.clone())),
         ingestion_service: ingestion_service.clone(),
+        vote_service: Arc::new(VoteService::new(repository)),
+        vote_rate_limiter: VoteRateLimiter::new(20, Duration::from_secs(60)),
     };
 
     let app = app_router(app_state, &settings);
     let addr: SocketAddr = format!("{}:{}", settings.host, settings.port).parse()?;
     let listener = TcpListener::bind(addr).await?;
 
-    info!(address = %addr, "Trustaraunt backend listening");
+    info!(address = %addr, "Cleanplated backend listening");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

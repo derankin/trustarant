@@ -233,6 +233,11 @@ body {
   gap: 0.5rem;
 }
 
+.trust-vote-count {
+  margin-left: 0.35rem;
+  font-weight: 600;
+}
+
 .trust-pagination {
   margin-top: 0.8rem;
 }

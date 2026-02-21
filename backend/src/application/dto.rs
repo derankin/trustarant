@@ -67,6 +67,9 @@ pub struct FacilitySummary {
     pub jurisdiction: String,
     pub trust_score: u8,
     pub latest_inspection_at: Option<DateTime<Utc>>,
+    pub likes: u64,
+    pub dislikes: u64,
+    pub vote_score: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -84,4 +87,7 @@ pub struct FacilityDetail {
     pub trust_score: u8,
     pub inspections_count: usize,
     pub latest_inspection_at: Option<DateTime<Utc>>,
+    pub likes: u64,
+    pub dislikes: u64,
+    pub vote_score: i64,
 }

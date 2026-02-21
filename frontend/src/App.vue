@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { ThumbsDown16, ThumbsUp16 } from '@carbon/icons-vue'
 
 type FacilitySummary = {
   id: string
@@ -13,6 +14,9 @@ type FacilitySummary = {
   jurisdiction: string
   trust_score: number
   latest_inspection_at?: string
+  likes?: number
+  dislikes?: number
+  vote_score?: number
 }
 
 type ConnectorIngestionStatus = {
@@ -45,7 +49,7 @@ type FacilitiesResponse = {
 
 type SortMode = 'trust_desc' | 'recent_desc' | 'name_asc'
 type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
-type HotNotChoice = 'hot' | 'not'
+type VoteType = 'like' | 'dislike'
 type LocationState = 'default' | 'requesting' | 'granted' | 'denied' | 'unsupported'
 type PaginationChange = { start: number; page: number; length: number }
 type GeoOptions = PositionOptions
@@ -53,8 +57,6 @@ type GeoOptions = PositionOptions
 const GEO_ERROR_PERMISSION_DENIED = 1
 const GEO_ERROR_POSITION_UNAVAILABLE = 2
 const GEO_ERROR_TIMEOUT = 3
-const HOT_NOT_STORAGE_KEY = 'cleanplated_hot-not-v1'
-
 const fallbackLatitude = 34.0522
 const fallbackLongitude = -118.2437
 const fallbackLabel = 'Downtown Los Angeles'
@@ -81,7 +83,7 @@ const locationMessage = ref('Using Southern California default center (Downtown 
 const currentPage = ref(1)
 const pageSize = ref(12)
 const topTenFacilities = ref<FacilitySummary[]>([])
-const hotNotVotes = ref<Record<string, HotNotChoice>>({})
+const voteInFlight = ref<Record<string, boolean>>({})
 const pageSizeChoices = [12, 24, 48]
 const jurisdictionOptions = [
   { label: 'All jurisdictions', value: 'all' },
@@ -126,12 +128,10 @@ const pageEnd = computed(() =>
 const paginationPageSizes = computed(() => pageSizeChoices)
 const topTenRanked = computed(() =>
   [...topTenFacilities.value].sort((left, right) => {
-    const leftVote = hotNotVotes.value[left.id] === 'hot' ? 1 : hotNotVotes.value[left.id] === 'not' ? -1 : 0
-    const rightVote =
-      hotNotVotes.value[right.id] === 'hot' ? 1 : hotNotVotes.value[right.id] === 'not' ? -1 : 0
-
-    if (leftVote !== rightVote) {
-      return rightVote - leftVote
+    const leftScore = left.vote_score ?? 0
+    const rightScore = right.vote_score ?? 0
+    if (leftScore !== rightScore) {
+      return rightScore - leftScore
     }
 
     return right.trust_score - left.trust_score
@@ -203,37 +203,72 @@ const distanceLabel = (facility: FacilitySummary) => {
   return `${miles.toFixed(1)} mi`
 }
 
-const getVote = (facilityId: string) => hotNotVotes.value[facilityId] ?? null
-
-const persistVotes = () => {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(HOT_NOT_STORAGE_KEY, JSON.stringify(hotNotVotes.value))
-  } catch {
-    // Ignore storage failures on locked-down devices.
+const withVoteDefaults = (facility: FacilitySummary): FacilitySummary => {
+  const likes = facility.likes ?? 0
+  const dislikes = facility.dislikes ?? 0
+  return {
+    ...facility,
+    likes,
+    dislikes,
+    vote_score: facility.vote_score ?? likes - dislikes,
   }
 }
 
-const loadVotes = () => {
-  if (typeof window === 'undefined') return
-  try {
-    const raw = window.localStorage.getItem(HOT_NOT_STORAGE_KEY)
-    if (!raw) return
-    const parsed = JSON.parse(raw) as Record<string, HotNotChoice>
-    hotNotVotes.value = parsed ?? {}
-  } catch {
-    hotNotVotes.value = {}
-  }
+const applyVoteSummaryToCollections = (
+  facilityId: string,
+  summary: { likes: number; dislikes: number; vote_score: number },
+) => {
+  const patchFacility = (facility: FacilitySummary) =>
+    facility.id === facilityId
+      ? {
+          ...facility,
+          likes: summary.likes,
+          dislikes: summary.dislikes,
+          vote_score: summary.vote_score,
+        }
+      : facility
+
+  topTenFacilities.value = topTenFacilities.value.map(patchFacility)
+  facilities.value = facilities.value.map(patchFacility)
 }
 
-const voteHotNot = (facilityId: string, vote: HotNotChoice) => {
-  if (hotNotVotes.value[facilityId] === vote) {
-    delete hotNotVotes.value[facilityId]
-  } else {
-    hotNotVotes.value[facilityId] = vote
+const isVoting = (facilityId: string) => voteInFlight.value[facilityId] === true
+
+const submitVote = async (facilityId: string, vote: VoteType) => {
+  if (isVoting(facilityId)) return
+
+  voteInFlight.value = { ...voteInFlight.value, [facilityId]: true }
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/v1/facilities/${encodeURIComponent(facilityId)}/vote`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ vote }),
+    })
+    if (!response.ok) {
+      if (response.status === 429) {
+        error.value = 'Vote limit reached. Please wait a minute before trying again.'
+      } else {
+        throw new Error(`Vote failed (${response.status})`)
+      }
+      return
+    }
+
+    const payload = await response.json()
+    const summary = payload?.data
+    if (!summary) return
+    applyVoteSummaryToCollections(facilityId, {
+      likes: Number(summary.likes ?? 0),
+      dislikes: Number(summary.dislikes ?? 0),
+      vote_score: Number(summary.vote_score ?? 0),
+    })
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : 'Vote submission failed'
+    error.value = message
+  } finally {
+    voteInFlight.value = { ...voteInFlight.value, [facilityId]: false }
   }
-  hotNotVotes.value = { ...hotNotVotes.value }
-  persistVotes()
 }
 
 const isLikelyMobileSafari = () => {
@@ -299,7 +334,7 @@ async function fetchTopTen() {
     }
 
     const payload: FacilitiesResponse = await response.json()
-    topTenFacilities.value = payload.data ?? []
+    topTenFacilities.value = (payload.data ?? []).map(withVoteDefaults)
   } catch {
     topTenFacilities.value = []
   } finally {
@@ -344,7 +379,7 @@ async function fetchFacilities(resetPage = false) {
     }
 
     const payload: FacilitiesResponse = await response.json()
-    facilities.value = payload.data ?? []
+    facilities.value = (payload.data ?? []).map(withVoteDefaults)
     totalMatches.value = payload.total_count ?? payload.count ?? facilities.value.length
     currentPage.value = payload.page ?? currentPage.value
     pageSize.value = payload.page_size ?? pageSize.value
@@ -470,7 +505,6 @@ async function requestBrowserLocation() {
 }
 
 onMounted(async () => {
-  loadVotes()
   await Promise.all([fetchFacilities(true), fetchIngestionStats()])
 })
 </script>
@@ -480,7 +514,9 @@ onMounted(async () => {
     <section class="trust-panel trust-panel--hero">
       <p class="trust-eyebrow">CleanPlated</p>
       <h1 class="trust-title">Find safer food, faster.</h1>
-      <p class="trust-lede">Southern California food safety data, normalized into one reliable Trust Score.</p>
+      <p class="trust-lede">
+        Live Southern California restaurant inspection data, normalized into one clear Trust Score.
+      </p>
 
       <form class="trust-form" @submit.prevent="onSearchSubmit">
         <cv-text-input
@@ -489,9 +525,7 @@ onMounted(async () => {
           placeholder="Search by business, address, ZIP, or city"
           size="lg"
         >
-          <template v-slot:helper-text>
-            Search by business name, address, ZIP code, or city
-          </template>
+          <template v-slot:helper-text> Search by restaurant name, address, ZIP code, or city </template>
         </cv-text-input>
 
         <div class="trust-actions">
@@ -526,9 +560,9 @@ onMounted(async () => {
 
     <section class="trust-stats">
       <cv-tile class="trust-stat-tile">
-        <p class="trust-kicker">Facilities Loaded</p>
+        <p class="trust-kicker">Restaurants Indexed</p>
         <p class="trust-stat">{{ ingestionStats?.unique_facilities?.toLocaleString() ?? '0' }}</p>
-        <p class="trust-note">Latest ingestion snapshot.</p>
+        <p class="trust-note">Current snapshot from the latest ingestion run.</p>
       </cv-tile>
 
       <cv-tile class="trust-stat-tile">
@@ -540,7 +574,7 @@ onMounted(async () => {
 
     <section class="trust-panel">
       <header class="trust-section-head">
-        <h2 class="trust-heading">Slice the data</h2>
+        <h2 class="trust-heading">Filter Results</h2>
         <cv-tag :label="`${totalMatches.toLocaleString()} result(s)`" kind="cool-gray" />
       </header>
 
@@ -577,7 +611,7 @@ onMounted(async () => {
     </section>
 
     <section v-if="featured" class="trust-panel">
-      <p class="trust-kicker">Top Match In Current Slice</p>
+      <p class="trust-kicker">Top match in current results</p>
       <h3 class="trust-subheading">{{ featured.name }}</h3>
       <p class="trust-address">{{ featured.address }}, {{ featured.city }} {{ featured.postal_code }}</p>
       <div class="trust-tags">
@@ -590,9 +624,9 @@ onMounted(async () => {
 
     <section class="trust-panel">
       <header class="trust-section-head">
-        <h2 class="trust-heading">Top 10: Hot or Not</h2>
+        <h2 class="trust-heading">Top 10 Community Picks</h2>
       </header>
-      <p class="trust-note">Mark your picks as hot or not. Hot votes bubble to the top for your next visit.</p>
+      <p class="trust-note">Tap thumbs up or down to help rank trusted spots near you.</p>
 
       <cv-inline-loading v-if="topTenLoading" state="loading" loading-text="Loading top facilities..." />
       <cv-inline-notification
@@ -618,18 +652,20 @@ onMounted(async () => {
             <cv-button
               size="sm"
               kind="ghost"
-              :class="{ 'slice-active': getVote(facility.id) === 'hot' }"
-              @click="voteHotNot(facility.id, 'hot')"
+              :disabled="isVoting(facility.id)"
+              @click="submitVote(facility.id, 'like')"
             >
-              Hot
+              <ThumbsUp16 />
+              <span class="trust-vote-count">{{ facility.likes ?? 0 }}</span>
             </cv-button>
             <cv-button
               size="sm"
               kind="ghost"
-              :class="{ 'slice-active': getVote(facility.id) === 'not' }"
-              @click="voteHotNot(facility.id, 'not')"
+              :disabled="isVoting(facility.id)"
+              @click="submitVote(facility.id, 'dislike')"
             >
-              Not
+              <ThumbsDown16 />
+              <span class="trust-vote-count">{{ facility.dislikes ?? 0 }}</span>
             </cv-button>
           </div>
         </li>
@@ -692,11 +728,12 @@ onMounted(async () => {
 
     <section class="trust-panel">
       <header class="trust-section-head">
-        <h2 class="trust-heading">Data provenance</h2>
+        <h2 class="trust-heading">Data Sources</h2>
       </header>
       <p class="trust-note">
-        CleanPlated aggregates LA County Open Data, San Diego Socrata, Long Beach public feeds,
-        and Orange/Pasadena public-record or portal data, plus Riverside/San Bernardino LIVES.
+        CleanPlated combines official county and city inspection sources across Southern California,
+        including LA Open Data, San Diego Socrata, Long Beach Public Health, Orange/Pasadena public records,
+        and Riverside/San Bernardino LIVES feeds.
       </p>
       <cv-structured-list>
         <template v-slot:headings>

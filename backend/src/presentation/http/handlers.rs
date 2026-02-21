@@ -1,13 +1,18 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
+    http::HeaderMap,
     http::StatusCode,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::{application::dto::FacilitySearchQuery, presentation::http::AppState};
+use crate::{
+    application::dto::FacilitySearchQuery,
+    domain::entities::VoteValue,
+    presentation::http::AppState,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct FacilitySearchParams {
@@ -28,6 +33,11 @@ pub struct FacilitySearchParams {
 pub struct HealthPayload {
     pub status: &'static str,
     pub timestamp: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VoteRequest {
+    pub vote: String,
 }
 
 pub async fn health() -> Json<HealthPayload> {
@@ -102,9 +112,80 @@ pub async fn trigger_refresh(
     ))
 }
 
+pub async fn record_vote(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(payload): Json<VoteRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let vote = match payload.vote.trim().to_ascii_lowercase().as_str() {
+        "like" => VoteValue::Like,
+        "dislike" => VoteValue::Dislike,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "vote must be one of: like, dislike".to_owned(),
+            ));
+        }
+    };
+
+    let voter_key = extract_voter_key(&headers);
+    let limiter_key = format!("{voter_key}:{id}");
+    if !state.vote_rate_limiter.allow(&limiter_key).await {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate limit exceeded, please try again shortly".to_owned(),
+        ));
+    }
+
+    let exists = state.directory_service.get(&id).await.map_err(internal_error)?;
+    if exists.is_none() {
+        return Err((StatusCode::NOT_FOUND, "Facility not found".to_owned()));
+    }
+
+    let summary = state
+        .vote_service
+        .record_vote(&id, &voter_key, vote)
+        .await
+        .map_err(internal_error)?;
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "data": {
+                "facility_id": id,
+                "likes": summary.likes,
+                "dislikes": summary.dislikes,
+                "vote_score": summary.score(),
+            }
+        })),
+    ))
+}
+
 fn internal_error(error: impl std::fmt::Display) -> (StatusCode, String) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         format!("internal error: {error}"),
     )
+}
+
+fn extract_voter_key(headers: &HeaderMap) -> String {
+    let from_xff = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    if let Some(value) = from_xff {
+        return value;
+    }
+
+    let from_real_ip = headers
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    from_real_ip.unwrap_or_else(|| "unknown".to_owned())
 }

@@ -6,7 +6,10 @@ use crate::{
     application::dto::{
         FacilityDetail, FacilitySearchQuery, FacilitySearchResult, FacilitySummary, ScoreSliceCounts,
     },
-    domain::{entities::Facility, repositories::FacilityRepository},
+    domain::{
+        entities::{Facility, FacilityVoteSummary},
+        repositories::FacilityRepository,
+    },
 };
 
 #[derive(Clone)]
@@ -150,11 +153,22 @@ impl DirectoryService {
         let page = query.page.unwrap_or(1).max(1);
         let total_count = facilities.len();
         let offset = (page - 1).saturating_mul(page_size);
-        let data = facilities
+        let page_facilities = facilities
             .into_iter()
             .skip(offset)
             .take(page_size)
-            .map(to_summary)
+            .collect::<Vec<_>>();
+        let page_ids = page_facilities
+            .iter()
+            .map(|facility| facility.id.clone())
+            .collect::<Vec<_>>();
+        let vote_summaries = self.repository.get_facility_vote_summaries(&page_ids).await?;
+        let data = page_facilities
+            .into_iter()
+            .map(|facility| {
+                let summary = vote_summaries.get(&facility.id).cloned().unwrap_or_default();
+                to_summary(facility, summary)
+            })
             .collect::<Vec<_>>();
 
         Ok(FacilitySearchResult {
@@ -167,36 +181,45 @@ impl DirectoryService {
         })
     }
 
-pub async fn get(
+    pub async fn get(
         &self,
         id: &str,
     ) -> Result<Option<FacilityDetail>, crate::domain::errors::RepositoryError> {
         let facility = self.repository.get_by_id(id).await?;
+        let Some(facility) = facility else {
+            return Ok(None);
+        };
 
-        Ok(facility.map(|facility| {
-            let latest_inspection_at = latest_inspection_at(&facility);
-            let inspections_count = facility.inspections.len();
+        let latest_inspection_at = latest_inspection_at(&facility);
+        let inspections_count = facility.inspections.len();
+        let vote_summaries = self
+            .repository
+            .get_facility_vote_summaries(&[facility.id.clone()])
+            .await?;
+        let vote_summary = vote_summaries.get(&facility.id).cloned().unwrap_or_default();
 
-            FacilityDetail {
-                id: facility.id,
-                source_id: facility.source_id,
-                name: facility.name,
-                address: facility.address,
-                city: facility.city,
-                state: facility.state,
-                postal_code: facility.postal_code,
-                latitude: facility.latitude,
-                longitude: facility.longitude,
-                jurisdiction: facility.jurisdiction.label().to_string(),
-                trust_score: facility.trust_score,
-                inspections_count,
-                latest_inspection_at,
-            }
+        Ok(Some(FacilityDetail {
+            id: facility.id,
+            source_id: facility.source_id,
+            name: facility.name,
+            address: facility.address,
+            city: facility.city,
+            state: facility.state,
+            postal_code: facility.postal_code,
+            latitude: facility.latitude,
+            longitude: facility.longitude,
+            jurisdiction: facility.jurisdiction.label().to_string(),
+            trust_score: facility.trust_score,
+            inspections_count,
+            latest_inspection_at,
+            likes: vote_summary.likes,
+            dislikes: vote_summary.dislikes,
+            vote_score: vote_summary.score(),
         }))
     }
 }
 
-fn to_summary(facility: Facility) -> FacilitySummary {
+fn to_summary(facility: Facility, vote_summary: FacilityVoteSummary) -> FacilitySummary {
     let latest_inspection_at = latest_inspection_at(&facility);
 
     FacilitySummary {
@@ -211,6 +234,9 @@ fn to_summary(facility: Facility) -> FacilitySummary {
         jurisdiction: facility.jurisdiction.label().to_string(),
         trust_score: facility.trust_score,
         latest_inspection_at,
+        likes: vote_summary.likes,
+        dislikes: vote_summary.dislikes,
+        vote_score: vote_summary.score(),
     }
 }
 

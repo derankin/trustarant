@@ -1,7 +1,8 @@
 use async_trait::async_trait;
+use std::collections::HashMap;
 
 use crate::domain::{
-    entities::{Facility, SystemIngestionStatus},
+    entities::{Facility, FacilityVoteSummary, SystemIngestionStatus, VoteValue},
     errors::RepositoryError,
 };
 
@@ -17,4 +18,14 @@ pub trait FacilityRepository: Send + Sync {
     async fn get_system_ingestion_status(
         &self,
     ) -> Result<Option<SystemIngestionStatus>, RepositoryError>;
+    async fn upsert_facility_vote(
+        &self,
+        facility_id: &str,
+        voter_key: &str,
+        vote: VoteValue,
+    ) -> Result<FacilityVoteSummary, RepositoryError>;
+    async fn get_facility_vote_summaries(
+        &self,
+        facility_ids: &[String],
+    ) -> Result<HashMap<String, FacilityVoteSummary>, RepositoryError>;
 }
