@@ -266,6 +266,21 @@ async function fetchFacilities(resetPage = false) {
   }
 }
 
+async function onSearchSubmit() {
+  // Keyword searches should default to broad matching.
+  if (hasKeywordQuery.value) {
+    const changedFilters = scoreSlice.value !== 'all' || recentOnly.value
+    scoreSlice.value = 'all'
+    recentOnly.value = false
+    if (changedFilters) {
+      // watcher will refetch with reset filters
+      return
+    }
+  }
+
+  await fetchFacilities(true)
+}
+
 async function fetchIngestionStats() {
   try {
     const response = await fetch(`${apiBaseUrl}/api/v1/system/ingestion`)
@@ -324,7 +339,7 @@ onMounted(async () => {
       <h1 class="trust-title">Find safer food, faster.</h1>
       <p class="trust-lede">Southern California food safety data, normalized into one reliable Trust Score.</p>
 
-      <form class="trust-form" @submit.prevent="fetchFacilities(true)">
+      <form class="trust-form" @submit.prevent="onSearchSubmit">
         <cv-text-input
           v-model="search"
           label="Search Directory"
