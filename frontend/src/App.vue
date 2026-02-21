@@ -47,6 +47,11 @@ type SortMode = 'trust_desc' | 'recent_desc' | 'name_asc'
 type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
 type LocationState = 'default' | 'requesting' | 'granted' | 'denied' | 'unsupported'
 type PaginationChange = { start: number; page: number; length: number }
+type GeoOptions = PositionOptions
+
+const GEO_ERROR_PERMISSION_DENIED = 1
+const GEO_ERROR_POSITION_UNAVAILABLE = 2
+const GEO_ERROR_TIMEOUT = 3
 
 const fallbackLatitude = 34.0522
 const fallbackLongitude = -118.2437
@@ -86,6 +91,9 @@ const jurisdictionOptions = [
 ]
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
+const publicBaseUrl = import.meta.env.VITE_PUBLIC_BASE_URL ?? 'https://cleanplated.com'
+const shareStatus = ref<{ kind: 'success' | 'error'; message: string } | null>(null)
+let shareStatusTimer: ReturnType<typeof setTimeout> | null = null
 
 const activeCenter = computed(() => {
   if (userLocation.value) {
@@ -178,6 +186,61 @@ const distanceLabel = (facility: FacilitySummary) => {
     facility.longitude,
   )
   return `${miles.toFixed(1)} mi`
+}
+
+const currentPublicOrigin = () => {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin
+  }
+  return publicBaseUrl
+}
+
+const facilityShareUrl = (facilityId: string) =>
+  `${currentPublicOrigin()}/share/f/${encodeURIComponent(facilityId)}`
+
+const setShareStatus = (kind: 'success' | 'error', message: string) => {
+  shareStatus.value = { kind, message }
+  if (shareStatusTimer) {
+    clearTimeout(shareStatusTimer)
+  }
+  shareStatusTimer = setTimeout(() => {
+    shareStatus.value = null
+  }, 4000)
+}
+
+const isLikelyMobileSafari = () => {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent
+  const isiOS = /iP(hone|ad|od)/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  const webkit = /WebKit/i.test(ua)
+  const excluded = /CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo/i.test(ua)
+  return isiOS && webkit && !excluded
+}
+
+const geolocationPermissionHint = () => {
+  if (isLikelyMobileSafari()) {
+    return 'Allow Location for Safari Websites in iOS Settings, then retry.'
+  }
+  return 'Allow location access for this site in your browser settings, then retry.'
+}
+
+const getCurrentPosition = (options: GeoOptions) =>
+  new Promise<GeolocationPosition>((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, options)
+  })
+
+async function copyShareLink(facilityId: string) {
+  const url = facilityShareUrl(facilityId)
+
+  try {
+    if (!navigator?.clipboard?.writeText) {
+      throw new Error('Clipboard API unavailable')
+    }
+    await navigator.clipboard.writeText(url)
+    setShareStatus('success', 'Share link copied.')
+  } catch {
+    setShareStatus('error', `Could not copy automatically. Use this link: ${url}`)
+  }
 }
 
 const onPaginationChange = ({ page, length }: PaginationChange) => {
@@ -293,6 +356,14 @@ async function fetchIngestionStats() {
 }
 
 async function requestBrowserLocation() {
+  if (locationState.value === 'requesting') return
+
+  if (!window.isSecureContext) {
+    locationState.value = 'unsupported'
+    locationMessage.value = 'Location requires a secure HTTPS connection.'
+    return
+  }
+
   if (!('geolocation' in navigator)) {
     locationState.value = 'unsupported'
     locationMessage.value = 'Browser geolocation is not supported on this device.'
@@ -302,27 +373,58 @@ async function requestBrowserLocation() {
   locationState.value = 'requesting'
   locationMessage.value = 'Requesting your location...'
 
-  await new Promise<void>((resolve) => {
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        userLocation.value = {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-        }
-        locationState.value = 'granted'
-        locationMessage.value = `Using browser location (±${Math.round(position.coords.accuracy)}m accuracy).`
-        resolve()
-      },
-      () => {
-        userLocation.value = null
-        locationState.value = 'denied'
-        locationMessage.value = 'Location permission denied. Reverting to Southern California default center.'
-        resolve()
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 },
-    )
-  })
+  try {
+    let position: GeolocationPosition
+
+    try {
+      position = await getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: 12000,
+        maximumAge: 300000,
+      })
+    } catch (firstError) {
+      const geolocationError = firstError as GeolocationPositionError
+      if (
+        geolocationError?.code === GEO_ERROR_TIMEOUT ||
+        geolocationError?.code === GEO_ERROR_POSITION_UNAVAILABLE
+      ) {
+        position = await getCurrentPosition({
+          enableHighAccuracy: false,
+          timeout: 20000,
+          maximumAge: 900000,
+        })
+      } else {
+        throw firstError
+      }
+    }
+
+    userLocation.value = {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: position.coords.accuracy,
+    }
+    locationState.value = 'granted'
+    locationMessage.value = `Using browser location (±${Math.round(position.coords.accuracy)}m accuracy).`
+  } catch (cause) {
+    userLocation.value = null
+    const geolocationError = cause as GeolocationPositionError
+
+    if (geolocationError?.code === GEO_ERROR_PERMISSION_DENIED) {
+      locationState.value = 'denied'
+      locationMessage.value = `Location permission denied. ${geolocationPermissionHint()} Reverting to Southern California default center.`
+    } else if (geolocationError?.code === GEO_ERROR_TIMEOUT) {
+      locationState.value = 'default'
+      locationMessage.value =
+        'Location lookup timed out on this network/device. Reverting to Southern California default center.'
+    } else if (geolocationError?.code === GEO_ERROR_POSITION_UNAVAILABLE) {
+      locationState.value = 'default'
+      locationMessage.value =
+        'Location is currently unavailable on this device. Reverting to Southern California default center.'
+    } else {
+      locationState.value = 'default'
+      locationMessage.value = 'Could not determine your location. Reverting to Southern California default center.'
+    }
+  }
 
   await fetchFacilities(true)
 }
@@ -357,7 +459,7 @@ onMounted(async () => {
             kind="secondary"
             type="button"
             :disabled="locationState === 'requesting'"
-            @click="requestBrowserLocation"
+            @click.prevent.stop="requestBrowserLocation"
           >
             {{ locationState === 'requesting' ? 'Locating…' : 'Use Browser Location' }}
           </cv-button>
@@ -443,6 +545,14 @@ onMounted(async () => {
         <cv-tag v-if="distanceLabel(featured)" :label="distanceLabel(featured) ?? ''" kind="teal" />
       </div>
       <p class="trust-note">Last inspection: {{ formatDate(featured.latest_inspection_at) }}</p>
+      <div class="trust-share-row">
+        <cv-button kind="tertiary" class="trust-share-button" @click="copyShareLink(featured.id)">
+          Copy share link
+        </cv-button>
+        <a class="trust-share-inline-link" :href="facilityShareUrl(featured.id)" target="_blank" rel="noopener">
+          Open share page
+        </a>
+      </div>
     </section>
 
     <section class="trust-panel">
@@ -482,7 +592,12 @@ onMounted(async () => {
             </div>
             <p class="trust-note">Inspected {{ formatDate(facility.latest_inspection_at) }}</p>
           </div>
-          <cv-tag :label="`${facility.trust_score}`" kind="green" />
+          <div class="trust-card__actions">
+            <cv-tag :label="`${facility.trust_score}`" kind="green" />
+            <cv-button kind="ghost" class="trust-share-button" @click="copyShareLink(facility.id)">
+              Share
+            </cv-button>
+          </div>
         </li>
       </ul>
 
@@ -495,6 +610,16 @@ onMounted(async () => {
           @change="onPaginationChange"
         />
       </div>
+
+      <cv-inline-notification
+        v-if="shareStatus"
+        :kind="shareStatus.kind"
+        title="Share"
+        :sub-title="shareStatus.message"
+        :hide-close-button="true"
+        :low-contrast="true"
+        style="margin-top: 0.75rem;"
+      />
     </section>
 
     <section class="trust-panel">
