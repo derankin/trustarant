@@ -33,19 +33,18 @@ impl DirectoryService {
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
 
-        if let Some(term) = query
-            .q
-            .as_ref()
-            .map(|value| value.trim().to_ascii_lowercase())
-        {
+        if let Some(term) = query.q.as_ref().map(|value| normalize_for_search(value)) {
             if !term.is_empty() {
+                let search_tokens = term.split_whitespace().collect::<Vec<_>>();
                 facilities.retain(|facility| {
-                    let candidate = format!(
+                    let candidate = normalize_for_search(&format!(
                         "{} {} {} {}",
                         facility.name, facility.address, facility.city, facility.postal_code
-                    )
-                    .to_ascii_lowercase();
-                    candidate.contains(&term)
+                    ));
+
+                    // Match each token independently so re-ordered terms and name variants
+                    // (e.g. "Mastro's" vs "mastros") still resolve predictably.
+                    search_tokens.iter().all(|token| candidate.contains(token))
                 });
             }
         }
@@ -297,6 +296,28 @@ fn latest_inspection_at(facility: &Facility) -> Option<DateTime<Utc>> {
         .max()
 }
 
+fn normalize_for_search(value: &str) -> String {
+    let mut normalized = String::with_capacity(value.len());
+    let mut last_was_space = false;
+
+    for ch in value.chars() {
+        if ch == '\'' || ch == '’' || ch == '`' {
+            // Drop apostrophes to normalize "Mastro's" -> "mastros".
+            continue;
+        }
+
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+            last_was_space = false;
+        } else if !last_was_space {
+            normalized.push(' ');
+            last_was_space = true;
+        }
+    }
+
+    normalized.trim().to_owned()
+}
+
 fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let radius_miles = 3_958.8_f64;
 
@@ -310,4 +331,25 @@ fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
 
     radius_miles * c
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_for_search;
+
+    #[test]
+    fn normalizes_apostrophes_and_punctuation() {
+        assert_eq!(normalize_for_search("Mastro's Steakhouse"), "mastros steakhouse");
+        assert_eq!(normalize_for_search("Mastro’s Steakhouse"), "mastros steakhouse");
+    }
+
+    #[test]
+    fn supports_out_of_order_multi_token_matching() {
+        let candidate = normalize_for_search("Mastro's Steakhouse Beverly Hills");
+        let query = normalize_for_search("hills mastros");
+
+        assert!(query
+            .split_whitespace()
+            .all(|token| candidate.contains(token)));
+    }
 }
