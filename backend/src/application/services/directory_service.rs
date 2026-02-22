@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use chrono::{DateTime, Utc};
 
 use crate::{
     application::dto::{
-        FacilityDetail, FacilitySearchQuery, FacilitySearchResult, FacilitySummary, ScoreSliceCounts,
+        FacilityDetail, FacilitySearchQuery, FacilitySearchResult, FacilitySummary,
+        ScoreSliceCounts,
     },
     domain::{
         entities::{Facility, FacilityVoteSummary},
@@ -33,6 +34,7 @@ impl DirectoryService {
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
 
+        let mut search_relevance: HashMap<String, usize> = HashMap::new();
         if let Some(term) = query.q.as_ref().map(|value| normalize_for_search(value)) {
             if !term.is_empty() {
                 let search_tokens = term.split_whitespace().collect::<Vec<_>>();
@@ -43,14 +45,27 @@ impl DirectoryService {
                     ));
                     let candidate_tokens = candidate.split_whitespace().collect::<Vec<_>>();
 
-                    // Match each token independently so re-ordered terms and name variants
-                    // (e.g. "Mastro's" vs "mastros" and singular/plural drift) resolve
-                    // predictably.
-                    search_tokens.iter().all(|query_token| {
-                        candidate_tokens
-                            .iter()
-                            .any(|candidate_token| tokens_match(candidate_token, query_token))
-                    })
+                    let relevance = search_tokens
+                        .iter()
+                        .map(|query_token| {
+                            candidate_tokens
+                                .iter()
+                                .map(|candidate_token| {
+                                    token_match_score(candidate_token, query_token)
+                                })
+                                .max()
+                                .unwrap_or(0)
+                        })
+                        .sum::<usize>();
+
+                    // Google-like behavior: include all facilities with meaningful token overlap
+                    // and rank stronger matches first.
+                    if relevance > 0 {
+                        search_relevance.insert(facility.id.clone(), relevance);
+                        true
+                    } else {
+                        false
+                    }
                 });
             }
         }
@@ -115,10 +130,8 @@ impl DirectoryService {
         {
             match score_slice.as_str() {
                 "elite" => facilities.retain(|facility| facility.trust_score >= 90),
-                "solid" => {
-                    facilities
-                        .retain(|facility| facility.trust_score >= 80 && facility.trust_score < 90)
-                }
+                "solid" => facilities
+                    .retain(|facility| facility.trust_score >= 80 && facility.trust_score < 90),
                 "watch" => facilities.retain(|facility| facility.trust_score < 80),
                 _ => {}
             }
@@ -141,20 +154,28 @@ impl DirectoryService {
                 facilities.sort_by(|left, right| left.name.cmp(&right.name));
             }
             _ => {
-                facilities.sort_by(|left, right| {
-                    right
-                        .trust_score
-                        .cmp(&left.trust_score)
-                        .then(right.updated_at.cmp(&left.updated_at))
-                });
+                if has_search_term {
+                    facilities.sort_by(|left, right| {
+                        let left_relevance = search_relevance.get(&left.id).copied().unwrap_or(0);
+                        let right_relevance = search_relevance.get(&right.id).copied().unwrap_or(0);
+
+                        right_relevance
+                            .cmp(&left_relevance)
+                            .then(right.trust_score.cmp(&left.trust_score))
+                            .then(right.updated_at.cmp(&left.updated_at))
+                    });
+                } else {
+                    facilities.sort_by(|left, right| {
+                        right
+                            .trust_score
+                            .cmp(&left.trust_score)
+                            .then(right.updated_at.cmp(&left.updated_at))
+                    });
+                }
             }
         }
 
-        let page_size = query
-            .page_size
-            .or(query.limit)
-            .unwrap_or(50)
-            .clamp(1, 200);
+        let page_size = query.page_size.or(query.limit).unwrap_or(50).clamp(1, 200);
         let page = query.page.unwrap_or(1).max(1);
         let total_count = facilities.len();
         let offset = (page - 1).saturating_mul(page_size);
@@ -167,11 +188,17 @@ impl DirectoryService {
             .iter()
             .map(|facility| facility.id.clone())
             .collect::<Vec<_>>();
-        let vote_summaries = self.repository.get_facility_vote_summaries(&page_ids).await?;
+        let vote_summaries = self
+            .repository
+            .get_facility_vote_summaries(&page_ids)
+            .await?;
         let data = page_facilities
             .into_iter()
             .map(|facility| {
-                let summary = vote_summaries.get(&facility.id).cloned().unwrap_or_default();
+                let summary = vote_summaries
+                    .get(&facility.id)
+                    .cloned()
+                    .unwrap_or_default();
                 to_summary(facility, summary)
             })
             .collect::<Vec<_>>();
@@ -201,7 +228,10 @@ impl DirectoryService {
             .repository
             .get_facility_vote_summaries(&[facility.id.clone()])
             .await?;
-        let vote_summary = vote_summaries.get(&facility.id).cloned().unwrap_or_default();
+        let vote_summary = vote_summaries
+            .get(&facility.id)
+            .cloned()
+            .unwrap_or_default();
 
         Ok(Some(FacilityDetail {
             id: facility.id,
@@ -245,7 +275,10 @@ impl DirectoryService {
         let mut ranked = facilities
             .into_iter()
             .map(|facility| {
-                let vote_summary = vote_summaries.get(&facility.id).cloned().unwrap_or_default();
+                let vote_summary = vote_summaries
+                    .get(&facility.id)
+                    .cloned()
+                    .unwrap_or_default();
                 (facility, vote_summary)
             })
             .collect::<Vec<_>>();
@@ -256,14 +289,16 @@ impl DirectoryService {
             return Ok(Vec::new());
         }
 
-        ranked.sort_by(|(left_facility, left_votes), (right_facility, right_votes)| {
-            right_votes
-                .likes
-                .cmp(&left_votes.likes)
-                .then(right_votes.score().cmp(&left_votes.score()))
-                .then(right_facility.trust_score.cmp(&left_facility.trust_score))
-                .then(right_facility.updated_at.cmp(&left_facility.updated_at))
-        });
+        ranked.sort_by(
+            |(left_facility, left_votes), (right_facility, right_votes)| {
+                right_votes
+                    .likes
+                    .cmp(&left_votes.likes)
+                    .then(right_votes.score().cmp(&left_votes.score()))
+                    .then(right_facility.trust_score.cmp(&left_facility.trust_score))
+                    .then(right_facility.updated_at.cmp(&left_facility.updated_at))
+            },
+        );
 
         Ok(ranked
             .into_iter()
@@ -332,22 +367,35 @@ fn singularize_token(token: &str) -> &str {
     }
 }
 
-fn tokens_match(candidate_token: &str, query_token: &str) -> bool {
+fn token_match_score(candidate_token: &str, query_token: &str) -> usize {
     if candidate_token == query_token {
-        return true;
+        return 6;
     }
 
     let candidate_singular = singularize_token(candidate_token);
     let query_singular = singularize_token(query_token);
     if candidate_singular == query_singular {
-        return true;
+        return 5;
+    }
+
+    // Stronger signal when token starts with the query term.
+    if candidate_token.starts_with(query_token) || query_token.starts_with(candidate_token) {
+        let min_prefix_len = 3;
+        if candidate_token.len() >= min_prefix_len && query_token.len() >= min_prefix_len {
+            return 4;
+        }
     }
 
     // Allow partial matches for meaningful tokens so "mastros" and "mastro"
     // still match in either direction, while avoiding noise on tiny terms.
     let min_partial_len = 4;
-    (candidate_token.len() >= min_partial_len && query_token.len() >= min_partial_len)
+    if (candidate_token.len() >= min_partial_len && query_token.len() >= min_partial_len)
         && (candidate_token.contains(query_token) || query_token.contains(candidate_token))
+    {
+        return 3;
+    }
+
+    0
 }
 
 fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
@@ -367,12 +415,18 @@ fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_for_search, tokens_match};
+    use super::{normalize_for_search, token_match_score};
 
     #[test]
     fn normalizes_apostrophes_and_punctuation() {
-        assert_eq!(normalize_for_search("Mastro's Steakhouse"), "mastros steakhouse");
-        assert_eq!(normalize_for_search("Mastro’s Steakhouse"), "mastros steakhouse");
+        assert_eq!(
+            normalize_for_search("Mastro's Steakhouse"),
+            "mastros steakhouse"
+        );
+        assert_eq!(
+            normalize_for_search("Mastro’s Steakhouse"),
+            "mastros steakhouse"
+        );
     }
 
     #[test]
@@ -381,15 +435,28 @@ mod tests {
         let query = normalize_for_search("hills mastros");
         let candidate_tokens = candidate.split_whitespace().collect::<Vec<_>>();
 
-        assert!(query.split_whitespace().all(|query_token| candidate_tokens
-            .iter()
-            .any(|candidate_token| tokens_match(candidate_token, query_token))));
+        let relevance = query
+            .split_whitespace()
+            .map(|query_token| {
+                candidate_tokens
+                    .iter()
+                    .map(|candidate_token| token_match_score(candidate_token, query_token))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .sum::<usize>();
+
+        assert!(relevance > 0);
     }
 
     #[test]
     fn supports_singular_plural_name_variants() {
-        assert!(tokens_match("mastros", "mastro"));
-        assert!(tokens_match("mastro", "mastros"));
+        assert!(token_match_score("mastros", "mastro") > 0);
+        assert!(token_match_score("mastro", "mastros") > 0);
+    }
+
+    #[test]
+    fn prefers_exact_over_partial_matches() {
+        assert!(token_match_score("mastros", "mastros") > token_match_score("mastros", "mast"));
     }
 }
-
