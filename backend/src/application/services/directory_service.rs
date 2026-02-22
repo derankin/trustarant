@@ -41,10 +41,16 @@ impl DirectoryService {
                         "{} {} {} {}",
                         facility.name, facility.address, facility.city, facility.postal_code
                     ));
+                    let candidate_tokens = candidate.split_whitespace().collect::<Vec<_>>();
 
                     // Match each token independently so re-ordered terms and name variants
-                    // (e.g. "Mastro's" vs "mastros") still resolve predictably.
-                    search_tokens.iter().all(|token| candidate.contains(token))
+                    // (e.g. "Mastro's" vs "mastros" and singular/plural drift) resolve
+                    // predictably.
+                    search_tokens.iter().all(|query_token| {
+                        candidate_tokens
+                            .iter()
+                            .any(|candidate_token| tokens_match(candidate_token, query_token))
+                    })
                 });
             }
         }
@@ -318,6 +324,32 @@ fn normalize_for_search(value: &str) -> String {
     normalized.trim().to_owned()
 }
 
+fn singularize_token(token: &str) -> &str {
+    if token.len() > 4 && token.ends_with('s') {
+        &token[..token.len() - 1]
+    } else {
+        token
+    }
+}
+
+fn tokens_match(candidate_token: &str, query_token: &str) -> bool {
+    if candidate_token == query_token {
+        return true;
+    }
+
+    let candidate_singular = singularize_token(candidate_token);
+    let query_singular = singularize_token(query_token);
+    if candidate_singular == query_singular {
+        return true;
+    }
+
+    // Allow partial matches for meaningful tokens so "mastros" and "mastro"
+    // still match in either direction, while avoiding noise on tiny terms.
+    let min_partial_len = 4;
+    (candidate_token.len() >= min_partial_len && query_token.len() >= min_partial_len)
+        && (candidate_token.contains(query_token) || query_token.contains(candidate_token))
+}
+
 fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let radius_miles = 3_958.8_f64;
 
@@ -335,7 +367,7 @@ fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_for_search;
+    use super::{normalize_for_search, tokens_match};
 
     #[test]
     fn normalizes_apostrophes_and_punctuation() {
@@ -347,9 +379,17 @@ mod tests {
     fn supports_out_of_order_multi_token_matching() {
         let candidate = normalize_for_search("Mastro's Steakhouse Beverly Hills");
         let query = normalize_for_search("hills mastros");
+        let candidate_tokens = candidate.split_whitespace().collect::<Vec<_>>();
 
-        assert!(query
-            .split_whitespace()
-            .all(|token| candidate.contains(token)));
+        assert!(query.split_whitespace().all(|query_token| candidate_tokens
+            .iter()
+            .any(|candidate_token| tokens_match(candidate_token, query_token))));
+    }
+
+    #[test]
+    fn supports_singular_plural_name_variants() {
+        assert!(tokens_match("mastros", "mastro"));
+        assert!(tokens_match("mastro", "mastros"));
     }
 }
+
