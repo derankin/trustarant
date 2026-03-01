@@ -1,8 +1,9 @@
 substitutions:
-  _REGION: us-west1
-  _AR_REPO: trustarant
-  _SERVICE: trustarant-web
-  _BACKEND_URL: https://trustarant-api-3y7woju2vq-uw.a.run.app
+  _REGION: us-central1
+  _AR_REPO: cleanplated
+  _SERVICE: cleanplated-web
+  _BACKEND_URL: https://cleanplated-api-swkeon42pq-uc.a.run.app
+  _GOOGLE_MAPS_API_KEY: ''
 
 steps:
   - name: gcr.io/cloud-builders/docker
@@ -12,6 +13,8 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/frontend:$SHORT_SHA
       - --build-arg
       - VITE_API_BASE_URL=${_BACKEND_URL}
+      - --build-arg
+      - VITE_GOOGLE_MAPS_API_KEY=${_GOOGLE_MAPS_API_KEY}
       - ./frontend
 
   - name: gcr.io/cloud-builders/docker
