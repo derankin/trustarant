@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ThumbsDown16, ThumbsUp16 } from '@carbon/icons-vue'
 import { trackEvent } from './lib/analytics'
 
@@ -102,6 +102,15 @@ const jurisdictionOptions = [
   { label: 'Pasadena', value: 'Pasadena' },
   { label: 'Vernon', value: 'Vernon' },
 ]
+
+const googleMapsApiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || ''
+const mapExpanded = ref(false)
+const mapReady = ref(false)
+const mapContainerRef = ref<HTMLElement | null>(null)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mapInstance: any = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mapMarkers: any[] = []
 
 const resolveApiBaseUrl = () => {
   const configured = import.meta.env.VITE_API_BASE_URL
@@ -425,7 +434,11 @@ const onPaginationChange = ({ page, length }: PaginationChange) => {
     page_size: pageSize.value,
     total_matches: totalMatches.value,
   })
-  void fetchFacilities()
+  void fetchFacilities().then(() => {
+    nextTick(() => {
+      document.getElementById('directory-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  })
 }
 
 const onRadiusChange = (rawValue: string | number) => {
@@ -627,12 +640,109 @@ async function requestBrowserLocation() {
   await fetchFacilities(true)
 }
 
+const loadGoogleMapsScript = (): Promise<void> =>
+  new Promise((resolve, reject) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((window as any).google?.maps) {
+      resolve()
+      return
+    }
+    const script = document.createElement('script')
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}`
+    script.async = true
+    script.defer = true
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('Failed to load Google Maps'))
+    document.head.appendChild(script)
+  })
+
+const clearMapMarkers = () => {
+  for (const marker of mapMarkers) {
+    marker.setMap(null)
+  }
+  mapMarkers = []
+}
+
+const updateMapMarkers = () => {
+  if (!mapInstance) return
+  clearMapMarkers()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = (window as any).google
+  const bounds = new g.maps.LatLngBounds()
+  let hasCoords = false
+  for (const f of facilities.value) {
+    if (!f.latitude || !f.longitude) continue
+    hasCoords = true
+    const pos = { lat: f.latitude, lng: f.longitude }
+    const marker = new g.maps.Marker({
+      position: pos,
+      map: mapInstance,
+      title: `${f.name} — Trust Score: ${f.trust_score}`,
+    })
+    mapMarkers.push(marker)
+    bounds.extend(pos)
+  }
+  if (hasCoords) {
+    mapInstance.fitBounds(bounds)
+    if (mapMarkers.length === 1) mapInstance.setZoom(15)
+  }
+}
+
+const initializeMap = async () => {
+  if (!googleMapsApiKey || !mapReady.value || !mapContainerRef.value) return
+  if (mapInstance) {
+    updateMapMarkers()
+    return
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = (window as any).google
+  mapInstance = new g.maps.Map(mapContainerRef.value, {
+    center: { lat: activeCenter.value.latitude, lng: activeCenter.value.longitude },
+    zoom: 12,
+    mapTypeControl: false,
+    streetViewControl: false,
+  })
+  updateMapMarkers()
+}
+
+const toggleMap = async () => {
+  mapExpanded.value = !mapExpanded.value
+  if (mapExpanded.value) {
+    trackEvent('cp_map_expanded')
+    await nextTick()
+    if (!mapInstance) {
+      await initializeMap()
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const g = (window as any).google
+      g?.maps?.event?.trigger(mapInstance, 'resize')
+      updateMapMarkers()
+    }
+  } else {
+    trackEvent('cp_map_collapsed')
+  }
+}
+
+watch(facilities, () => {
+  if (mapExpanded.value && mapInstance) {
+    updateMapMarkers()
+  }
+})
+
 onMounted(async () => {
   trackEvent('cp_app_loaded', {
     page_path: window.location.pathname,
     page_title: document.title,
   })
-  await Promise.all([fetchFacilities(true), fetchIngestionStats()])
+  const startupTasks: Promise<void>[] = [fetchFacilities(true), fetchIngestionStats()]
+  if (googleMapsApiKey) {
+    startupTasks.push(
+      loadGoogleMapsScript()
+        .then(() => { mapReady.value = true })
+        .catch(() => { /* map is optional */ })
+    )
+  }
+  await Promise.all(startupTasks)
 })
 </script>
 
@@ -749,7 +859,8 @@ onMounted(async () => {
       <p class="trust-note">Last inspection: {{ formatDate(featured.latest_inspection_at) }}</p>
     </section>
 
-    <section class="trust-panel">
+    <div class="trust-sections-reorderable" :class="{ 'trust-sections--search-active': hasKeywordQuery }">
+    <section class="trust-panel trust-section-top10">
       <header class="trust-section-head">
         <h2 class="trust-heading">Top 10 Most Liked</h2>
       </header>
@@ -801,7 +912,7 @@ onMounted(async () => {
       </ol>
     </section>
 
-    <section class="trust-panel">
+    <section id="directory-section" class="trust-panel trust-section-directory">
       <header class="trust-section-head">
         <h2 class="trust-heading">Directory</h2>
         <cv-tag :label="`${totalMatches.toLocaleString()} result(s)`" kind="cool-gray" />
@@ -810,6 +921,15 @@ onMounted(async () => {
       <p v-if="totalMatches > 0" class="trust-note">
         Showing {{ pageStart.toLocaleString() }}–{{ pageEnd.toLocaleString() }} of {{ totalMatches.toLocaleString() }}
       </p>
+
+      <div v-if="googleMapsApiKey" class="trust-map-panel">
+        <cv-button kind="tertiary" size="sm" @click="toggleMap">
+          {{ mapExpanded ? 'Hide Map' : 'Show Map' }}
+        </cv-button>
+        <div v-show="mapExpanded" class="trust-map-wrap">
+          <div ref="mapContainerRef" class="trust-map"></div>
+        </div>
+      </div>
 
       <cv-inline-loading v-if="loading" state="loading" loading-text="Loading latest trust scores..." />
       <cv-inline-notification
@@ -867,6 +987,7 @@ onMounted(async () => {
       </ul>
 
       <div v-if="totalMatches > 0" class="trust-pagination">
+        <p class="trust-page-indicator">Page {{ currentPage }} of {{ totalPages }}</p>
         <cv-pagination
           :number-of-items="totalMatches"
           :page="currentPage"
@@ -876,6 +997,7 @@ onMounted(async () => {
         />
       </div>
     </section>
+    </div>
 
     <section class="trust-panel">
       <header class="trust-section-head">
