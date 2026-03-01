@@ -1,6 +1,10 @@
-# Trustaraunt Monorepo
+<p align="center">
+  <img src="assets/cleanplated-logo.svg" alt="Cleanplated Logo" width="200">
+</p>
 
-Trustaraunt centralizes Southern California restaurant health inspection data and exposes normalized Trust Scores through a mobile-first directory.
+# Cleanplated
+
+Cleanplated centralizes Southern California restaurant health inspection data and exposes normalized Trust Scores through a mobile-first directory.
 
 ## Structure
 
