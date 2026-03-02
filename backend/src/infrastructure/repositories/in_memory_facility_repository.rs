@@ -177,6 +177,7 @@ impl FacilityRepository for InMemoryFacilityRepository {
 
         facilities.sort_by(|a, b| b.trust_score.cmp(&a.trust_score));
 
+        // total_count reflects post-slice-filter count (matches number of paginated results)
         let total_count = facilities.len();
         let page_size = query.page_size.or(query.limit).unwrap_or(50).clamp(1, 200);
         let page = query.page.unwrap_or(1).max(1);

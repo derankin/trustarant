@@ -549,19 +549,25 @@ impl FacilityRepository for PostgresFacilityRepository {
             builder.push(" AND f.updated_at >= NOW() - INTERVAL '90 days'");
         }
 
+        // Close the scored CTE, compute slice counts from the full unfiltered set,
+        // then apply score_slice filter so slice counts reflect pre-filter totals.
         builder.push(
             r#"
+            ), counts AS (
+                SELECT
+                    COUNT(*) AS all_count,
+                    COUNT(*) FILTER(WHERE trust_score >= 90) AS elite_count,
+                    COUNT(*) FILTER(WHERE trust_score >= 80 AND trust_score < 90) AS solid_count,
+                    COUNT(*) FILTER(WHERE trust_score < 80) AS watch_count
+                FROM scored
             )
-            SELECT s.*,
-                COUNT(*) OVER() AS total_count,
-                COUNT(*) FILTER(WHERE s.trust_score >= 90) OVER() AS elite_count,
-                COUNT(*) FILTER(WHERE s.trust_score >= 80 AND s.trust_score < 90) OVER() AS solid_count,
-                COUNT(*) FILTER(WHERE s.trust_score < 80) OVER() AS watch_count
-            FROM scored s
+            SELECT s.*, c.all_count, c.elite_count, c.solid_count, c.watch_count,
+                COUNT(*) OVER() AS total_count
+            FROM scored s, counts c
             WHERE 1=1"#,
         );
 
-        // Score slice filter (applied after CTE so slice counts reflect pre-filter totals)
+        // Score slice filter (applied in outer query; slice counts from CTE are pre-filter)
         if let Some(slice) = query
             .score_slice
             .as_ref()
@@ -610,14 +616,16 @@ impl FacilityRepository for PostgresFacilityRepository {
             .map_err(to_repository_error)?;
 
         let mut total_count: usize = 0;
+        let mut all_count: usize = 0;
         let mut elite_count: usize = 0;
         let mut solid_count: usize = 0;
         let mut watch_count: usize = 0;
         let mut facilities = Vec::with_capacity(rows.len());
 
         for row in &rows {
-            if total_count == 0 {
+            if facilities.is_empty() {
                 let tc: i64 = row.get("total_count");
+                let ac: i64 = row.get("all_count");
                 let ec: i64 = row.get("elite_count");
                 let sc: i64 = row.get("solid_count");
                 let wc: i64 = row.get("watch_count");
@@ -625,12 +633,13 @@ impl FacilityRepository for PostgresFacilityRepository {
                 elite_count = ec.max(0) as usize;
                 solid_count = sc.max(0) as usize;
                 watch_count = wc.max(0) as usize;
+                all_count = ac.max(0) as usize;
             }
             facilities.push(map_facility_row_ref(row)?);
         }
 
         let slice_counts = ScoreSliceCounts {
-            all: total_count,
+            all: all_count,
             elite: elite_count,
             solid: solid_count,
             watch: watch_count,

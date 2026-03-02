@@ -287,11 +287,10 @@ async function fetchSuggestions(query: string) {
   }
 }
 
-const onSearchInput = (value: string | Event) => {
-  const text = typeof value === 'string' ? value : (value as InputEvent)?.data ?? search.value
+const onSearchInput = () => {
   if (autocompleteTimer) clearTimeout(autocompleteTimer)
   autocompleteTimer = setTimeout(() => {
-    void fetchSuggestions(typeof text === 'string' ? text : search.value)
+    void fetchSuggestions(search.value)
   }, 250)
 }
 
