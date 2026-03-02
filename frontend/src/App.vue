@@ -130,6 +130,7 @@ const showSuggestions = ref(false)
 const focusedSuggestionIndex = ref(-1)
 let autocompleteTimer: ReturnType<typeof setTimeout> | null = null
 let autocompleteController: AbortController | null = null
+let searchController: AbortController | null = null
 
 const googleMapsApiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || ''
 const mapReady = ref(false)
@@ -596,6 +597,8 @@ const onRadiusChange = (rawValue: string | number) => {
 }
 
 async function fetchFacilities(resetPage = false) {
+  if (searchController) searchController.abort()
+
   if (resetPage) {
     currentPage.value = 1
   }
@@ -603,10 +606,13 @@ async function fetchFacilities(resetPage = false) {
   loading.value = true
   error.value = null
 
+  searchController = new AbortController()
   const query = buildFacilitiesQuery(currentPage.value, pageSize.value, sortMode.value)
 
   try {
-    const response = await fetch(`${apiBaseUrl}/api/v1/facilities?${query.toString()}`)
+    const response = await fetch(`${apiBaseUrl}/api/v1/facilities?${query.toString()}`, {
+      signal: searchController.signal,
+    })
     if (!response.ok) {
       throw new Error('We couldn\'t load restaurants right now. Please try again.')
     }
@@ -643,6 +649,7 @@ async function fetchFacilities(resetPage = false) {
     })
     void fetchTopTen()
   } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'AbortError') return
     error.value = cause instanceof Error ? cause.message : 'Something unexpected happened. Please try again.'
     trackEvent('cp_search_results_failed', {
       query_type: classifyQueryTerm(search.value),
@@ -940,6 +947,7 @@ onMounted(async () => {
 onUnmounted(() => {
   if (autocompleteTimer) clearTimeout(autocompleteTimer)
   if (autocompleteController) autocompleteController.abort()
+  if (searchController) searchController.abort()
 })
 </script>
 

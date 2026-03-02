@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::error;
 
 use crate::{
-    application::dto::FacilitySearchQuery,
-    domain::entities::VoteValue,
+    domain::entities::{FacilitySearchQuery, VoteValue},
     presentation::http::AppState,
 };
 

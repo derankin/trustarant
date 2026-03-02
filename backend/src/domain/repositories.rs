@@ -1,14 +1,12 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 
-use crate::{
-    application::dto::{FacilitySearchQuery, ScoreSliceCounts},
-    domain::{
-        entities::{
-            AutocompleteSuggestion, Facility, FacilityVoteSummary, SystemIngestionStatus, VoteValue,
-        },
-        errors::RepositoryError,
+use crate::domain::{
+    entities::{
+        AutocompleteSuggestion, Facility, FacilitySearchQuery, FacilityVoteSummary,
+        ScoreSliceCounts, SystemIngestionStatus, VoteValue,
     },
+    errors::RepositoryError,
 };
 
 #[async_trait]

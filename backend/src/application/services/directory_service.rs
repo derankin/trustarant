@@ -3,9 +3,11 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    application::dto::{FacilityDetail, FacilitySearchQuery, FacilitySearchResult, FacilitySummary},
+    application::dto::{FacilityDetail, FacilitySearchResult, FacilitySummary},
     domain::{
-        entities::{AutocompleteSuggestion, Facility, FacilityVoteSummary},
+        entities::{
+            AutocompleteSuggestion, Facility, FacilitySearchQuery, FacilityVoteSummary,
+        },
         repositories::FacilityRepository,
     },
 };

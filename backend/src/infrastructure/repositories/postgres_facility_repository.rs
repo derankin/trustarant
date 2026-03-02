@@ -3,16 +3,14 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, postgres::PgPoolOptions};
 
-use crate::{
-    application::dto::{FacilitySearchQuery, ScoreSliceCounts},
-    domain::{
-        entities::{
-            AutocompleteSuggestion, ConnectorIngestionStatus, Facility, FacilityVoteSummary,
-            Inspection, Jurisdiction, SystemIngestionStatus, VoteValue,
-        },
-        errors::RepositoryError,
-        repositories::FacilityRepository,
+use crate::domain::{
+    entities::{
+        AutocompleteSuggestion, ConnectorIngestionStatus, Facility, FacilitySearchQuery,
+        FacilityVoteSummary, Inspection, Jurisdiction, ScoreSliceCounts, SystemIngestionStatus,
+        VoteValue,
     },
+    errors::RepositoryError,
+    repositories::FacilityRepository,
 };
 
 pub struct PostgresFacilityRepository {
