@@ -1,13 +1,13 @@
 variable "project_name" {
   description = "Display name of the GCP project"
   type        = string
-  default     = "trustarant"
+  default     = "cleanplated"
 }
 
 variable "project_id_prefix" {
   description = "Prefix for globally unique project IDs"
   type        = string
-  default     = "trustarant"
+  default     = "cleanplated"
 }
 
 variable "billing_account" {

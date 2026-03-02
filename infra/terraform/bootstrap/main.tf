@@ -16,7 +16,7 @@ locals {
   ]
 }
 
-resource "google_project" "trustarant" {
+resource "google_project" "cleanplated" {
   name                = var.project_name
   project_id          = local.project_id
   billing_account     = var.billing_account
@@ -28,16 +28,16 @@ resource "google_project" "trustarant" {
 resource "google_project_service" "required" {
   for_each = toset(local.required_apis)
 
-  project = google_project.trustarant.project_id
+  project = google_project.cleanplated.project_id
   service = each.value
 
   disable_on_destroy = false
 }
 
 resource "google_storage_bucket" "terraform_state" {
-  name          = "${google_project.trustarant.project_id}-tfstate"
+  name          = "${google_project.cleanplated.project_id}-tfstate"
   location      = var.state_bucket_location
-  project       = google_project.trustarant.project_id
+  project       = google_project.cleanplated.project_id
   force_destroy = false
 
   uniform_bucket_level_access = true

@@ -35,33 +35,33 @@ impl Default for SanDiegoConnector {
 
 impl SanDiegoConnector {
     pub fn from_env() -> Self {
-        let base_url = env::var("TRUSTARANT_SD_SOCRATA_BASE_URL")
+        let base_url = env::var("CLEANPLATED_SD_SOCRATA_BASE_URL")
             .unwrap_or_else(|_| DEFAULT_BASE_URL.to_owned())
             .trim_end_matches('/')
             .to_owned();
-        let dataset_id = env::var("TRUSTARANT_SD_SOCRATA_DATASET_ID")
+        let dataset_id = env::var("CLEANPLATED_SD_SOCRATA_DATASET_ID")
             .unwrap_or_else(|_| DEFAULT_DATASET_ID.to_owned());
-        let page_size = env::var("TRUSTARANT_SD_SOCRATA_PAGE_SIZE")
+        let page_size = env::var("CLEANPLATED_SD_SOCRATA_PAGE_SIZE")
             .ok()
-            .or_else(|| env::var("TRUSTARANT_SD_SOCRATA_LIMIT").ok())
+            .or_else(|| env::var("CLEANPLATED_SD_SOCRATA_LIMIT").ok())
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_PAGE_SIZE)
             .max(1);
-        let max_records = env::var("TRUSTARANT_SD_SOCRATA_MAX_RECORDS")
+        let max_records = env::var("CLEANPLATED_SD_SOCRATA_MAX_RECORDS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0);
-        let active_only = env::var("TRUSTARANT_SD_SOCRATA_ACTIVE_ONLY")
+        let active_only = env::var("CLEANPLATED_SD_SOCRATA_ACTIVE_ONLY")
             .ok()
             .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
             .unwrap_or(true);
-        let timeout_secs = env::var("TRUSTARANT_SD_SOCRATA_TIMEOUT_SECS")
+        let timeout_secs = env::var("CLEANPLATED_SD_SOCRATA_TIMEOUT_SECS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
         let mut headers = HeaderMap::new();
-        if let Ok(app_token) = env::var("TRUSTARANT_SD_SOCRATA_APP_TOKEN") {
+        if let Ok(app_token) = env::var("CLEANPLATED_SD_SOCRATA_APP_TOKEN") {
             let trimmed = app_token.trim();
             if !trimmed.is_empty() {
                 if let Ok(value) = HeaderValue::from_str(trimmed) {

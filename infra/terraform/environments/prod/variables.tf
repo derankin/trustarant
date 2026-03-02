@@ -66,7 +66,7 @@ variable "ingestion_refresh_schedule" {
 variable "database_url_secret_id" {
   description = "Secret Manager secret ID containing DATABASE_URL (Neon/Postgres connection string)"
   type        = string
-  default     = "trustarant-database-url"
+  default     = "cleanplated-database-url"
 }
 
 variable "long_beach_closures_url" {

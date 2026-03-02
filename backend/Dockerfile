@@ -12,12 +12,12 @@ RUN apt-get update \
   && useradd --create-home --shell /usr/sbin/nologin app
 
 WORKDIR /app
-COPY --from=builder /app/target/release/trustarant-backend /usr/local/bin/trustarant-backend
+COPY --from=builder /app/target/release/cleanplated-backend /usr/local/bin/cleanplated-backend
 
-ENV TRUSTARANT_HOST=0.0.0.0
-ENV TRUSTARANT_PORT=8080
+ENV CLEANPLATED_HOST=0.0.0.0
+ENV CLEANPLATED_PORT=8080
 
 EXPOSE 8080
 USER app
 
-CMD ["trustarant-backend"]
+CMD ["cleanplated-backend"]

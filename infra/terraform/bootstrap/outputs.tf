@@ -1,11 +1,11 @@
 output "project_id" {
   description = "Newly created project ID"
-  value       = google_project.trustarant.project_id
+  value       = google_project.cleanplated.project_id
 }
 
 output "project_name" {
   description = "Newly created project display name"
-  value       = google_project.trustarant.name
+  value       = google_project.cleanplated.name
 }
 
 output "region" {

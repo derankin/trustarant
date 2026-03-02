@@ -32,13 +32,13 @@ impl Default for LongBeachConnector {
 
 impl LongBeachConnector {
     pub fn from_env() -> Self {
-        let closures_url = env::var("TRUSTARANT_LONG_BEACH_CLOSURES_URL")
+        let closures_url = env::var("CLEANPLATED_LONG_BEACH_CLOSURES_URL")
             .unwrap_or_else(|_| DEFAULT_CLOSURES_URL.to_owned());
-        let limit = env::var("TRUSTARANT_LONG_BEACH_LIMIT")
+        let limit = env::var("CLEANPLATED_LONG_BEACH_LIMIT")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_LIMIT);
-        let timeout_secs = env::var("TRUSTARANT_LONG_BEACH_TIMEOUT_SECS")
+        let timeout_secs = env::var("CLEANPLATED_LONG_BEACH_TIMEOUT_SECS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(20);

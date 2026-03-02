@@ -20,7 +20,7 @@ pub enum RunMode {
 
 impl Settings {
     pub fn from_env() -> Self {
-        let run_mode = match env::var("TRUSTARANT_RUN_MODE")
+        let run_mode = match env::var("CLEANPLATED_RUN_MODE")
             .unwrap_or_else(|_| "api".into())
             .to_ascii_lowercase()
             .as_str()
@@ -31,14 +31,14 @@ impl Settings {
         };
 
         Self {
-            host: env::var("TRUSTARANT_HOST").unwrap_or_else(|_| "0.0.0.0".into()),
-            port: env::var("TRUSTARANT_PORT")
+            host: env::var("CLEANPLATED_HOST").unwrap_or_else(|_| "0.0.0.0".into()),
+            port: env::var("CLEANPLATED_PORT")
                 .ok()
                 .and_then(|value| value.parse::<u16>().ok())
                 .unwrap_or(8080),
-            cors_origin: env::var("TRUSTARANT_CORS_ORIGIN")
+            cors_origin: env::var("CLEANPLATED_CORS_ORIGIN")
                 .unwrap_or_else(|_| "http://localhost:5173".into()),
-            ingestion_interval_hours: env::var("TRUSTARANT_INGESTION_INTERVAL_HOURS")
+            ingestion_interval_hours: env::var("CLEANPLATED_INGESTION_INTERVAL_HOURS")
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(24),
@@ -47,7 +47,7 @@ impl Settings {
                 .ok()
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
-            enable_background_ingestion: env::var("TRUSTARANT_ENABLE_BACKGROUND_INGESTION")
+            enable_background_ingestion: env::var("CLEANPLATED_ENABLE_BACKGROUND_INGESTION")
                 .ok()
                 .map(|value| {
                     matches!(

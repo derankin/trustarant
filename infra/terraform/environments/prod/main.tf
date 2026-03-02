@@ -9,7 +9,7 @@ locals {
     "storage.googleapis.com"
   ]
 
-  frontend_bucket_name = var.frontend_bucket_name != "" ? var.frontend_bucket_name : "${var.project_id}-trustarant-web"
+  frontend_bucket_name = var.frontend_bucket_name != "" ? var.frontend_bucket_name : "${var.project_id}-cleanplated-web"
 }
 
 resource "google_project_service" "required" {
@@ -24,8 +24,8 @@ resource "google_project_service" "required" {
 resource "google_artifact_registry_repository" "backend" {
   project       = var.project_id
   location      = var.region
-  repository_id = "trustarant"
-  description   = "Container registry for Trustarant services"
+  repository_id = "cleanplated"
+  description   = "Container registry for Cleanplated services"
   format        = "DOCKER"
 
   depends_on = [google_project_service.required]
@@ -33,16 +33,16 @@ resource "google_artifact_registry_repository" "backend" {
 
 resource "google_service_account" "cloud_run_runtime" {
   project      = var.project_id
-  account_id   = "trustarant-api"
-  display_name = "Trustarant Cloud Run runtime"
+  account_id   = "cleanplated-api"
+  display_name = "Cleanplated Cloud Run runtime"
 
   depends_on = [google_project_service.required]
 }
 
 resource "google_service_account" "scheduler_invoker" {
   project      = var.project_id
-  account_id   = "trustarant-scheduler"
-  display_name = "Trustarant Scheduler Invoker"
+  account_id   = "cleanplated-scheduler"
+  display_name = "Cleanplated Scheduler Invoker"
 
   depends_on = [google_project_service.required]
 }
@@ -85,7 +85,7 @@ resource "google_secret_manager_secret_iam_member" "runtime_secret_accessor_on_d
 
 resource "google_cloud_run_v2_service" "api" {
   project              = var.project_id
-  name                 = "trustarant-api"
+  name                 = "cleanplated-api"
   location             = var.region
   ingress              = "INGRESS_TRAFFIC_ALL"
   invoker_iam_disabled = var.disable_backend_invoker_iam_check
@@ -106,49 +106,49 @@ resource "google_cloud_run_v2_service" "api" {
       }
 
       env {
-        name  = "TRUSTARANT_PORT"
+        name  = "CLEANPLATED_PORT"
         value = "8080"
       }
 
       env {
-        name  = "TRUSTARANT_HOST"
+        name  = "CLEANPLATED_HOST"
         value = "0.0.0.0"
       }
 
       env {
-        name  = "TRUSTARANT_CORS_ORIGIN"
+        name  = "CLEANPLATED_CORS_ORIGIN"
         value = "*"
       }
 
       env {
-        name  = "TRUSTARANT_RUN_MODE"
+        name  = "CLEANPLATED_RUN_MODE"
         value = "api"
       }
 
       env {
-        name  = "TRUSTARANT_ENABLE_BACKGROUND_INGESTION"
+        name  = "CLEANPLATED_ENABLE_BACKGROUND_INGESTION"
         value = "false"
       }
 
       env {
-        name  = "TRUSTARANT_LONG_BEACH_LIMIT"
+        name  = "CLEANPLATED_LONG_BEACH_LIMIT"
         value = tostring(var.long_beach_limit)
       }
 
       env {
-        name  = "TRUSTARANT_LONG_BEACH_TIMEOUT_SECS"
+        name  = "CLEANPLATED_LONG_BEACH_TIMEOUT_SECS"
         value = tostring(var.long_beach_timeout_secs)
       }
 
       env {
-        name  = "TRUSTARANT_CPRA_TIMEOUT_SECS"
+        name  = "CLEANPLATED_CPRA_TIMEOUT_SECS"
         value = tostring(var.cpra_timeout_secs)
       }
 
       dynamic "env" {
         for_each = var.long_beach_closures_url != "" ? [var.long_beach_closures_url] : []
         content {
-          name  = "TRUSTARANT_LONG_BEACH_CLOSURES_URL"
+          name  = "CLEANPLATED_LONG_BEACH_CLOSURES_URL"
           value = env.value
         }
       }
@@ -156,7 +156,7 @@ resource "google_cloud_run_v2_service" "api" {
       dynamic "env" {
         for_each = var.oc_cpra_export_url != "" ? [var.oc_cpra_export_url] : []
         content {
-          name  = "TRUSTARANT_OC_CPRA_EXPORT_URL"
+          name  = "CLEANPLATED_OC_CPRA_EXPORT_URL"
           value = env.value
         }
       }
@@ -164,7 +164,7 @@ resource "google_cloud_run_v2_service" "api" {
       dynamic "env" {
         for_each = var.pasadena_cpra_export_url != "" ? [var.pasadena_cpra_export_url] : []
         content {
-          name  = "TRUSTARANT_PASADENA_CPRA_EXPORT_URL"
+          name  = "CLEANPLATED_PASADENA_CPRA_EXPORT_URL"
           value = env.value
         }
       }
@@ -189,7 +189,7 @@ resource "google_cloud_run_v2_service" "api" {
 
 resource "google_cloud_run_v2_job" "ingestion" {
   project             = var.project_id
-  name                = "trustarant-ingestion"
+  name                = "cleanplated-ingestion"
   location            = var.region
   deletion_protection = false
 
@@ -203,29 +203,29 @@ resource "google_cloud_run_v2_job" "ingestion" {
         image = var.backend_image
 
         env {
-          name  = "TRUSTARANT_RUN_MODE"
+          name  = "CLEANPLATED_RUN_MODE"
           value = "refresh_once"
         }
 
         env {
-          name  = "TRUSTARANT_LONG_BEACH_LIMIT"
+          name  = "CLEANPLATED_LONG_BEACH_LIMIT"
           value = tostring(var.long_beach_limit)
         }
 
         env {
-          name  = "TRUSTARANT_LONG_BEACH_TIMEOUT_SECS"
+          name  = "CLEANPLATED_LONG_BEACH_TIMEOUT_SECS"
           value = tostring(var.long_beach_timeout_secs)
         }
 
         env {
-          name  = "TRUSTARANT_CPRA_TIMEOUT_SECS"
+          name  = "CLEANPLATED_CPRA_TIMEOUT_SECS"
           value = tostring(var.cpra_timeout_secs)
         }
 
         dynamic "env" {
           for_each = var.long_beach_closures_url != "" ? [var.long_beach_closures_url] : []
           content {
-            name  = "TRUSTARANT_LONG_BEACH_CLOSURES_URL"
+            name  = "CLEANPLATED_LONG_BEACH_CLOSURES_URL"
             value = env.value
           }
         }
@@ -233,7 +233,7 @@ resource "google_cloud_run_v2_job" "ingestion" {
         dynamic "env" {
           for_each = var.oc_cpra_export_url != "" ? [var.oc_cpra_export_url] : []
           content {
-            name  = "TRUSTARANT_OC_CPRA_EXPORT_URL"
+            name  = "CLEANPLATED_OC_CPRA_EXPORT_URL"
             value = env.value
           }
         }
@@ -241,7 +241,7 @@ resource "google_cloud_run_v2_job" "ingestion" {
         dynamic "env" {
           for_each = var.pasadena_cpra_export_url != "" ? [var.pasadena_cpra_export_url] : []
           content {
-            name  = "TRUSTARANT_PASADENA_CPRA_EXPORT_URL"
+            name  = "CLEANPLATED_PASADENA_CPRA_EXPORT_URL"
             value = env.value
           }
         }
@@ -267,7 +267,7 @@ resource "google_cloud_run_v2_job" "ingestion" {
 
 resource "google_cloud_run_v2_service" "frontend" {
   project              = var.project_id
-  name                 = "trustarant-web"
+  name                 = "cleanplated-web"
   location             = var.region
   ingress              = "INGRESS_TRAFFIC_ALL"
   invoker_iam_disabled = var.disable_frontend_invoker_iam_check
@@ -331,7 +331,7 @@ resource "google_cloud_scheduler_job" "ingestion_refresh" {
   count = var.enable_ingestion_scheduler ? 1 : 0
 
   project     = var.project_id
-  name        = "trustarant-ingestion-refresh"
+  name        = "cleanplated-ingestion-refresh"
   description = "Triggers backend ingestion refresh"
   region      = var.region
   schedule    = var.ingestion_refresh_schedule

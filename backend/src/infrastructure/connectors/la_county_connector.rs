@@ -33,21 +33,21 @@ impl Default for LaCountyConnector {
 
 impl LaCountyConnector {
     pub fn from_env() -> Self {
-        let inventory_url = env::var("TRUSTARANT_LA_INVENTORY_URL")
+        let inventory_url = env::var("CLEANPLATED_LA_INVENTORY_URL")
             .unwrap_or_else(|_| DEFAULT_INVENTORY_URL.to_owned());
-        let inspections_url = env::var("TRUSTARANT_LA_INSPECTIONS_URL")
+        let inspections_url = env::var("CLEANPLATED_LA_INSPECTIONS_URL")
             .unwrap_or_else(|_| DEFAULT_INSPECTIONS_URL.to_owned());
-        let page_size = env::var("TRUSTARANT_LA_PAGE_SIZE")
+        let page_size = env::var("CLEANPLATED_LA_PAGE_SIZE")
             .ok()
-            .or_else(|| env::var("TRUSTARANT_LA_LIMIT").ok())
+            .or_else(|| env::var("CLEANPLATED_LA_LIMIT").ok())
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_PAGE_SIZE)
             .max(1);
-        let max_records = env::var("TRUSTARANT_LA_MAX_RECORDS")
+        let max_records = env::var("CLEANPLATED_LA_MAX_RECORDS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0);
-        let timeout_secs = env::var("TRUSTARANT_LA_TIMEOUT_SECS")
+        let timeout_secs = env::var("CLEANPLATED_LA_TIMEOUT_SECS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(20);
