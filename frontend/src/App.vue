@@ -749,11 +749,19 @@ onMounted(async () => {
 <template>
   <main class="trust-app">
     <section class="trust-panel trust-panel--hero">
-      <p class="trust-eyebrow">CleanPlated</p>
-      <h1 class="trust-title">Find safer food, faster.</h1>
-      <p class="trust-lede">
-        Live Southern California restaurant inspection data, normalized into one clear Trust Score.
-      </p>
+      <div class="hero-logo">
+        <img src="/cleanplated-logo.svg" alt="CleanPlated logo" width="80" height="80" />
+      </div>
+
+      <div class="hero-content">
+        <p class="trust-eyebrow">CleanPlated</p>
+        <h1 class="trust-title">Find safer food, faster.</h1>
+        <p class="trust-lede">
+          Live Southern California restaurant inspection data, normalized into one clear Trust Score.
+        </p>
+      </div>
+
+      <hr class="hero-divider" />
 
       <form class="trust-form" @submit.prevent="onSearchSubmit">
         <cv-text-input
@@ -776,23 +784,23 @@ onMounted(async () => {
             {{ locationState === 'requesting' ? 'Locating…' : 'Use Browser Location' }}
           </cv-button>
         </div>
+
+        <p class="trust-note">{{ locationMessage }}</p>
+        <p class="trust-note">
+          {{ hasKeywordQuery ? 'Keyword mode active (radius ignored).' : `Centering near ${activeCenter.label}.` }}
+        </p>
+
+        <cv-slider
+          label="Search Radius"
+          :model-value="String(radiusMiles)"
+          min="0.5"
+          max="15"
+          step="0.5"
+          :min-label="'0.5 mi'"
+          :max-label="'15 mi'"
+          @change="onRadiusChange"
+        />
       </form>
-
-      <p class="trust-note">{{ locationMessage }}</p>
-      <p class="trust-note">
-        {{ hasKeywordQuery ? 'Keyword mode active (radius ignored).' : `Centering near ${activeCenter.label}.` }}
-      </p>
-
-      <cv-slider
-        label="Search Radius"
-        :model-value="String(radiusMiles)"
-        min="0.5"
-        max="15"
-        step="0.5"
-        :min-label="'0.5 mi'"
-        :max-label="'15 mi'"
-        @change="onRadiusChange"
-      />
     </section>
 
     <section class="trust-stats">
