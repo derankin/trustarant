@@ -1,14 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
 use crate::{
-    application::dto::{
-        FacilityDetail, FacilitySearchQuery, FacilitySearchResult, FacilitySummary,
-        ScoreSliceCounts,
-    },
+    application::dto::{FacilityDetail, FacilitySearchQuery, FacilitySearchResult, FacilitySummary},
     domain::{
-        entities::{Facility, FacilityVoteSummary},
+        entities::{AutocompleteSuggestion, Facility, FacilityVoteSummary},
         repositories::FacilityRepository,
     },
 };
@@ -27,164 +24,13 @@ impl DirectoryService {
         &self,
         query: FacilitySearchQuery,
     ) -> Result<FacilitySearchResult, crate::domain::errors::RepositoryError> {
-        let mut facilities = self.repository.list().await?;
-        let has_search_term = query
-            .q
-            .as_ref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-
-        let mut search_relevance: HashMap<String, usize> = HashMap::new();
-        if let Some(term) = query.q.as_ref().map(|value| normalize_for_search(value)) {
-            if !term.is_empty() {
-                let search_tokens = term.split_whitespace().collect::<Vec<_>>();
-                facilities.retain(|facility| {
-                    let candidate = normalize_for_search(&format!(
-                        "{} {} {} {}",
-                        facility.name, facility.address, facility.city, facility.postal_code
-                    ));
-                    let candidate_tokens = candidate.split_whitespace().collect::<Vec<_>>();
-
-                    let relevance = search_tokens
-                        .iter()
-                        .map(|query_token| {
-                            candidate_tokens
-                                .iter()
-                                .map(|candidate_token| {
-                                    token_match_score(candidate_token, query_token)
-                                })
-                                .max()
-                                .unwrap_or(0)
-                        })
-                        .sum::<usize>();
-
-                    // Google-like behavior: include all facilities with meaningful token overlap
-                    // and rank stronger matches first.
-                    if relevance > 0 {
-                        search_relevance.insert(facility.id.clone(), relevance);
-                        true
-                    } else {
-                        false
-                    }
-                });
-            }
-        }
-
-        if let Some(jurisdiction) = query
-            .jurisdiction
-            .as_ref()
-            .map(|value| value.trim().to_ascii_lowercase())
-        {
-            if !jurisdiction.is_empty() && jurisdiction != "all" {
-                facilities.retain(|facility| {
-                    facility
-                        .jurisdiction
-                        .label()
-                        .eq_ignore_ascii_case(jurisdiction.as_str())
-                });
-            }
-        }
-
-        // Search terms (name/address/ZIP) should not be constrained by the default
-        // "near downtown LA" radius used for discovery mode.
-        if !has_search_term {
-            if let (Some(latitude), Some(longitude), Some(radius_miles)) =
-                (query.latitude, query.longitude, query.radius_miles)
-            {
-                facilities.retain(|facility| {
-                    haversine_miles(latitude, longitude, facility.latitude, facility.longitude)
-                        <= radius_miles.max(0.1)
-                });
-            }
-        }
-
-        if query.recent_only.unwrap_or(false) {
-            let now = Utc::now();
-            facilities.retain(|facility| {
-                latest_inspection_at(facility)
-                    .map(|inspected_at| now.signed_duration_since(inspected_at).num_days() <= 90)
-                    .unwrap_or(false)
-            });
-        }
-
-        let slice_counts = ScoreSliceCounts {
-            all: facilities.len(),
-            elite: facilities
-                .iter()
-                .filter(|facility| facility.trust_score >= 90)
-                .count(),
-            solid: facilities
-                .iter()
-                .filter(|facility| facility.trust_score >= 80 && facility.trust_score < 90)
-                .count(),
-            watch: facilities
-                .iter()
-                .filter(|facility| facility.trust_score < 80)
-                .count(),
-        };
-
-        if let Some(score_slice) = query
-            .score_slice
-            .as_ref()
-            .map(|value| value.trim().to_ascii_lowercase())
-        {
-            match score_slice.as_str() {
-                "elite" => facilities.retain(|facility| facility.trust_score >= 90),
-                "solid" => facilities
-                    .retain(|facility| facility.trust_score >= 80 && facility.trust_score < 90),
-                "watch" => facilities.retain(|facility| facility.trust_score < 80),
-                _ => {}
-            }
-        }
-
-        match query
-            .sort
-            .as_ref()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("recent_desc") => {
-                facilities.sort_by(|left, right| {
-                    latest_inspection_at(right)
-                        .cmp(&latest_inspection_at(left))
-                        .then(right.trust_score.cmp(&left.trust_score))
-                });
-            }
-            Some("name_asc") => {
-                facilities.sort_by(|left, right| left.name.cmp(&right.name));
-            }
-            _ => {
-                if has_search_term {
-                    facilities.sort_by(|left, right| {
-                        let left_relevance = search_relevance.get(&left.id).copied().unwrap_or(0);
-                        let right_relevance = search_relevance.get(&right.id).copied().unwrap_or(0);
-
-                        right_relevance
-                            .cmp(&left_relevance)
-                            .then(right.trust_score.cmp(&left.trust_score))
-                            .then(right.updated_at.cmp(&left.updated_at))
-                    });
-                } else {
-                    facilities.sort_by(|left, right| {
-                        right
-                            .trust_score
-                            .cmp(&left.trust_score)
-                            .then(right.updated_at.cmp(&left.updated_at))
-                    });
-                }
-            }
-        }
-
         let page_size = query.page_size.or(query.limit).unwrap_or(50).clamp(1, 200);
         let page = query.page.unwrap_or(1).max(1);
-        let total_count = facilities.len();
-        let offset = (page - 1).saturating_mul(page_size);
-        let page_facilities = facilities
-            .into_iter()
-            .skip(offset)
-            .take(page_size)
-            .collect::<Vec<_>>();
-        let page_ids = page_facilities
+
+        let (facilities, total_count, slice_counts) =
+            self.repository.search_facilities(&query).await?;
+
+        let page_ids = facilities
             .iter()
             .map(|facility| facility.id.clone())
             .collect::<Vec<_>>();
@@ -192,7 +38,7 @@ impl DirectoryService {
             .repository
             .get_facility_vote_summaries(&page_ids)
             .await?;
-        let data = page_facilities
+        let data = facilities
             .into_iter()
             .map(|facility| {
                 let summary = vote_summaries
@@ -211,6 +57,14 @@ impl DirectoryService {
             page_size,
             slice_counts,
         })
+    }
+
+    pub async fn autocomplete(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<AutocompleteSuggestion>, crate::domain::errors::RepositoryError> {
+        self.repository.autocomplete(prefix, limit).await
     }
 
     pub async fn get(
@@ -335,128 +189,4 @@ fn latest_inspection_at(facility: &Facility) -> Option<DateTime<Utc>> {
         .iter()
         .map(|inspection| inspection.inspected_at)
         .max()
-}
-
-fn normalize_for_search(value: &str) -> String {
-    let mut normalized = String::with_capacity(value.len());
-    let mut last_was_space = false;
-
-    for ch in value.chars() {
-        if ch == '\'' || ch == '’' || ch == '`' {
-            // Drop apostrophes to normalize "Mastro's" -> "mastros".
-            continue;
-        }
-
-        if ch.is_ascii_alphanumeric() {
-            normalized.push(ch.to_ascii_lowercase());
-            last_was_space = false;
-        } else if !last_was_space {
-            normalized.push(' ');
-            last_was_space = true;
-        }
-    }
-
-    normalized.trim().to_owned()
-}
-
-fn singularize_token(token: &str) -> &str {
-    if token.len() > 4 && token.ends_with('s') {
-        &token[..token.len() - 1]
-    } else {
-        token
-    }
-}
-
-fn token_match_score(candidate_token: &str, query_token: &str) -> usize {
-    if candidate_token == query_token {
-        return 6;
-    }
-
-    let candidate_singular = singularize_token(candidate_token);
-    let query_singular = singularize_token(query_token);
-    if candidate_singular == query_singular {
-        return 5;
-    }
-
-    // Stronger signal when token starts with the query term.
-    if candidate_token.starts_with(query_token) || query_token.starts_with(candidate_token) {
-        let min_prefix_len = 3;
-        if candidate_token.len() >= min_prefix_len && query_token.len() >= min_prefix_len {
-            return 4;
-        }
-    }
-
-    // Allow partial matches for meaningful tokens so "mastros" and "mastro"
-    // still match in either direction, while avoiding noise on tiny terms.
-    let min_partial_len = 4;
-    if (candidate_token.len() >= min_partial_len && query_token.len() >= min_partial_len)
-        && (candidate_token.contains(query_token) || query_token.contains(candidate_token))
-    {
-        return 3;
-    }
-
-    0
-}
-
-fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    let radius_miles = 3_958.8_f64;
-
-    let lat1_rad = lat1.to_radians();
-    let lat2_rad = lat2.to_radians();
-    let dlat = (lat2 - lat1).to_radians();
-    let dlon = (lon2 - lon1).to_radians();
-
-    let a =
-        (dlat / 2.0).sin().powi(2) + lat1_rad.cos() * lat2_rad.cos() * (dlon / 2.0).sin().powi(2);
-    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-
-    radius_miles * c
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{normalize_for_search, token_match_score};
-
-    #[test]
-    fn normalizes_apostrophes_and_punctuation() {
-        assert_eq!(
-            normalize_for_search("Mastro's Steakhouse"),
-            "mastros steakhouse"
-        );
-        assert_eq!(
-            normalize_for_search("Mastro’s Steakhouse"),
-            "mastros steakhouse"
-        );
-    }
-
-    #[test]
-    fn supports_out_of_order_multi_token_matching() {
-        let candidate = normalize_for_search("Mastro's Steakhouse Beverly Hills");
-        let query = normalize_for_search("hills mastros");
-        let candidate_tokens = candidate.split_whitespace().collect::<Vec<_>>();
-
-        let relevance = query
-            .split_whitespace()
-            .map(|query_token| {
-                candidate_tokens
-                    .iter()
-                    .map(|candidate_token| token_match_score(candidate_token, query_token))
-                    .max()
-                    .unwrap_or(0)
-            })
-            .sum::<usize>();
-
-        assert!(relevance > 0);
-    }
-
-    #[test]
-    fn supports_singular_plural_name_variants() {
-        assert!(token_match_score("mastros", "mastro") > 0);
-        assert!(token_match_score("mastro", "mastros") > 0);
-    }
-
-    #[test]
-    fn prefers_exact_over_partial_matches() {
-        assert!(token_match_score("mastros", "mastros") > token_match_score("mastros", "mast"));
-    }
 }

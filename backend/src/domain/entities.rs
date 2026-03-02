@@ -126,3 +126,12 @@ impl FacilityVoteSummary {
         self.likes as i64 - self.dislikes as i64
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AutocompleteSuggestion {
+    pub id: String,
+    pub name: String,
+    pub city: String,
+    pub postal_code: String,
+    pub trust_score: u8,
+}

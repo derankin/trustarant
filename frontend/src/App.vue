@@ -53,6 +53,14 @@ type TopPicksResponse = {
   count: number
 }
 
+type AutocompleteSuggestion = {
+  id: string
+  name: string
+  city: string
+  postal_code: string
+  trust_score: number
+}
+
 type SortMode = 'trust_desc' | 'recent_desc' | 'name_asc'
 type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
 type VoteType = 'like' | 'dislike'
@@ -93,15 +101,18 @@ const voteInFlight = ref<Record<string, boolean>>({})
 const pageSizeChoices = [12, 24, 48]
 const jurisdictionOptions = [
   { label: 'All jurisdictions', value: 'all' },
-  { label: 'Los Angeles County', value: 'Los Angeles County' },
-  { label: 'San Diego County', value: 'San Diego County' },
-  { label: 'Orange County', value: 'Orange County' },
-  { label: 'Riverside County', value: 'Riverside County' },
-  { label: 'San Bernardino County', value: 'San Bernardino County' },
-  { label: 'Long Beach', value: 'Long Beach' },
-  { label: 'Pasadena', value: 'Pasadena' },
-  { label: 'Vernon', value: 'Vernon' },
+  { label: 'Los Angeles County', value: 'lac' },
+  { label: 'San Diego County', value: 'sdc' },
+  { label: 'Orange County', value: 'oc' },
+  { label: 'Riverside County', value: 'riv' },
+  { label: 'San Bernardino County', value: 'sbc' },
+  { label: 'Long Beach', value: 'lb' },
+  { label: 'Pasadena', value: 'pas' },
 ]
+
+const suggestions = ref<AutocompleteSuggestion[]>([])
+const showSuggestions = ref(false)
+let autocompleteTimer: ReturnType<typeof setTimeout> | null = null
 
 const googleMapsApiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || ''
 const mapExpanded = ref(false)
@@ -255,6 +266,52 @@ const distanceLabel = (facility: FacilitySummary) => {
   return `${miles.toFixed(1)} mi`
 }
 
+async function fetchSuggestions(query: string) {
+  const trimmed = query.trim()
+  if (trimmed.length < 2) {
+    suggestions.value = []
+    showSuggestions.value = false
+    return
+  }
+  try {
+    const response = await fetch(
+      `${apiBaseUrl}/api/v1/facilities/autocomplete?q=${encodeURIComponent(trimmed)}&limit=8`,
+    )
+    if (!response.ok) return
+    const payload = await response.json()
+    suggestions.value = payload.data ?? []
+    showSuggestions.value = suggestions.value.length > 0
+  } catch {
+    suggestions.value = []
+    showSuggestions.value = false
+  }
+}
+
+const onSearchInput = (value: string | Event) => {
+  const text = typeof value === 'string' ? value : (value as InputEvent)?.data ?? search.value
+  if (autocompleteTimer) clearTimeout(autocompleteTimer)
+  autocompleteTimer = setTimeout(() => {
+    void fetchSuggestions(typeof text === 'string' ? text : search.value)
+  }, 250)
+}
+
+const selectSuggestion = (suggestion: AutocompleteSuggestion) => {
+  search.value = suggestion.name
+  showSuggestions.value = false
+  suggestions.value = []
+  trackEvent('cp_autocomplete_selected', {
+    suggestion_id: suggestion.id,
+    suggestion_name: suggestion.name,
+  })
+  void fetchFacilities(true)
+}
+
+const dismissSuggestions = () => {
+  setTimeout(() => {
+    showSuggestions.value = false
+  }, 200)
+}
+
 const withVoteDefaults = (facility: FacilitySummary): FacilitySummary => {
   const likes = facility.likes ?? 0
   const dislikes = facility.dislikes ?? 0
@@ -376,6 +433,9 @@ const buildFacilitiesQuery = (page: number, requestedPageSize: number, sort: Sor
 
   if (term) {
     query.set('q', term)
+    // Always send location for proximity ranking signal on text search
+    query.set('latitude', String(activeCenter.value.latitude))
+    query.set('longitude', String(activeCenter.value.longitude))
   } else {
     query.set('latitude', String(activeCenter.value.latitude))
     query.set('longitude', String(activeCenter.value.longitude))
@@ -756,14 +816,32 @@ onMounted(async () => {
       </p>
 
       <form class="trust-form" @submit.prevent="onSearchSubmit">
-        <cv-text-input
-          v-model="search"
-          label="Search Directory"
-          placeholder="Search by business, address, ZIP, or city"
-          size="lg"
-        >
-          <template v-slot:helper-text> Search by restaurant name, address, ZIP code, or city </template>
-        </cv-text-input>
+        <div class="cp-search-wrap">
+          <cv-text-input
+            v-model="search"
+            label="Search Directory"
+            placeholder="Search by business, address, ZIP, or city"
+            size="lg"
+            @input="onSearchInput"
+            @focus="() => { if (suggestions.length > 0) showSuggestions = true }"
+            @blur="dismissSuggestions"
+          >
+            <template v-slot:helper-text> Search by restaurant name, address, ZIP code, or city </template>
+          </cv-text-input>
+
+          <ul v-if="showSuggestions && suggestions.length > 0" class="cp-suggestions">
+            <li
+              v-for="s in suggestions"
+              :key="s.id"
+              class="cp-suggestions__item"
+              @mousedown.prevent="selectSuggestion(s)"
+            >
+              <span class="cp-suggestions__name">{{ s.name }}</span>
+              <span class="cp-suggestions__meta">{{ s.city }}, {{ s.postal_code }}</span>
+              <span class="cp-suggestions__score">{{ s.trust_score }}</span>
+            </li>
+          </ul>
+        </div>
 
         <div class="trust-actions">
           <cv-button kind="primary" type="submit">Search</cv-button>

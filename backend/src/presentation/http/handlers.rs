@@ -30,6 +30,12 @@ pub struct FacilitySearchParams {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct AutocompleteParams {
+    pub q: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TopPicksParams {
     pub limit: Option<usize>,
 }
@@ -182,6 +188,25 @@ pub async fn record_vote(
             }
         })),
     ))
+}
+
+pub async fn autocomplete(
+    State(state): State<AppState>,
+    Query(params): Query<AutocompleteParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let prefix = params.q.unwrap_or_default();
+    if prefix.trim().is_empty() {
+        return Ok(Json(serde_json::json!({ "data": [] })));
+    }
+
+    let limit = params.limit.unwrap_or(8).clamp(1, 20);
+    let suggestions = state
+        .directory_service
+        .autocomplete(prefix.trim(), limit)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(serde_json::json!({ "data": suggestions })))
 }
 
 fn internal_error(error: impl std::fmt::Display) -> (StatusCode, String) {
