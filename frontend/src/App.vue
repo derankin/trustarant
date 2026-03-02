@@ -274,7 +274,7 @@ const formatSourceName = (source: string) => {
   const labels: Record<string, string> = {
     la_county_open_data: 'Los Angeles County',
     san_diego_socrata: 'San Diego County',
-    long_beach_closures_page: 'City of Long Beach',
+    long_beach_live_plus_closures: 'City of Long Beach',
     lives_batch_riv_sbc: 'Riverside & San Bernardino',
     cpra_import_orange_pasadena: 'Orange County & Pasadena',
   }
@@ -1173,10 +1173,9 @@ onMounted(async () => {
 
       <p class="cp-meta">Last updated: {{ lastRefreshLabel }}</p>
     </section>
-  </main>
 
-  <!-- ─── Footer ─── -->
-  <footer class="cp-footer">
+    <!-- ─── Footer ─── -->
+    <footer class="cp-footer">
     <div class="cp-footer__inner">
       <p class="cp-footer__brand">CleanPlated</p>
       <p class="cp-footer__copy">
@@ -1193,5 +1192,6 @@ onMounted(async () => {
       </nav>
       <p class="cp-footer__legal">&copy; {{ new Date().getFullYear() }} CleanPlated. All rights reserved.</p>
     </div>
-  </footer>
+    </footer>
+  </main>
 </template>
