@@ -37,30 +37,28 @@ impl Jurisdiction {
         }
     }
 
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::LosAngelesCounty,
+            Self::SanDiegoCounty,
+            Self::LongBeach,
+            Self::RiversideCounty,
+            Self::SanBernardinoCounty,
+            Self::OrangeCounty,
+            Self::Pasadena,
+        ]
+    }
+
     pub fn from_code(code: &str) -> Option<Self> {
-        match code {
-            "lac" => Some(Self::LosAngelesCounty),
-            "sdc" => Some(Self::SanDiegoCounty),
-            "lb" => Some(Self::LongBeach),
-            "riv" => Some(Self::RiversideCounty),
-            "sbc" => Some(Self::SanBernardinoCounty),
-            "oc" => Some(Self::OrangeCounty),
-            "pas" => Some(Self::Pasadena),
-            _ => None,
-        }
+        Self::all().iter().find(|j| j.code() == code).cloned()
     }
 
     pub fn from_label(label: &str) -> Option<Self> {
-        match label.to_ascii_lowercase().as_str() {
-            "los angeles county" => Some(Self::LosAngelesCounty),
-            "san diego county" => Some(Self::SanDiegoCounty),
-            "long beach" => Some(Self::LongBeach),
-            "riverside county" => Some(Self::RiversideCounty),
-            "san bernardino county" => Some(Self::SanBernardinoCounty),
-            "orange county" => Some(Self::OrangeCounty),
-            "pasadena" => Some(Self::Pasadena),
-            _ => None,
-        }
+        let lower = label.to_ascii_lowercase();
+        Self::all()
+            .iter()
+            .find(|j| j.label().to_ascii_lowercase() == lower)
+            .cloned()
     }
 }
 

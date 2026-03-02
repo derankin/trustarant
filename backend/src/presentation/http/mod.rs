@@ -13,4 +13,5 @@ pub struct AppState {
     pub ingestion_service: Arc<IngestionService>,
     pub vote_service: Arc<VoteService>,
     pub vote_rate_limiter: VoteRateLimiter,
+    pub autocomplete_rate_limiter: VoteRateLimiter,
 }

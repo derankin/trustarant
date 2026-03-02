@@ -245,7 +245,7 @@ const topTenRanked = computed(() =>
   }),
 )
 
-const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 
 const scoreColor = (score: number) => {
   if (score >= 90) return 'score--excellent'

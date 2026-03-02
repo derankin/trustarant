@@ -13,6 +13,17 @@ use crate::domain::{
     repositories::FacilityRepository,
 };
 
+/// Full-text search rank weight in composite scoring formula.
+const FTS_RANK_WEIGHT: f64 = 10.0;
+/// Trigram name similarity weight in composite scoring formula.
+const NAME_SIM_WEIGHT: f64 = 5.0;
+/// Maximum geo-proximity bonus points (decays over ~50 km).
+const GEO_PROXIMITY_MAX_BONUS: f64 = 5.0;
+/// Distance in meters at which geo-proximity bonus fully decays.
+const GEO_PROXIMITY_DECAY_METERS: f64 = 10000.0;
+/// Minimum trigram similarity threshold for fuzzy text matching.
+const TRIGRAM_SIMILARITY_THRESHOLD: f64 = 0.15;
+
 pub struct PostgresFacilityRepository {
     pool: PgPool,
 }
@@ -427,7 +438,7 @@ impl FacilityRepository for PostgresFacilityRepository {
             .unwrap_or(false);
         let has_geo = query.latitude.is_some() && query.longitude.is_some();
 
-        let page_size = query.page_size.or(query.limit).unwrap_or(50).clamp(1, 200);
+        let page_size = query.page_size.unwrap_or(50).clamp(1, 200);
         let page = query.page.unwrap_or(1).max(1);
         let offset = (page - 1).saturating_mul(page_size);
 
@@ -454,7 +465,9 @@ impl FacilityRepository for PostgresFacilityRepository {
             builder.push_bind(term);
             builder.push(") OR similarity(f.name, ");
             builder.push_bind(term);
-            builder.push(") > 0.15)");
+            builder.push(") > ");
+            builder.push_bind(TRIGRAM_SIMILARITY_THRESHOLD);
+            builder.push(")");
         } else {
             builder.push("WITH scored AS (SELECT f.*, 0::real AS fts_rank, 0::real AS name_sim");
 
@@ -540,7 +553,9 @@ impl FacilityRepository for PostgresFacilityRepository {
             .map(|v| v.trim().to_ascii_lowercase());
         match sort.as_deref() {
             Some("recent_desc") => {
-                builder.push(" ORDER BY updated_at DESC, trust_score DESC");
+                builder.push(
+                    " ORDER BY (SELECT MAX((elem->>'inspected_at')::timestamptz) FROM jsonb_array_elements(inspections) AS elem) DESC NULLS LAST, trust_score DESC",
+                );
             }
             Some("name_asc") => {
                 builder.push(" ORDER BY name ASC");
@@ -548,12 +563,13 @@ impl FacilityRepository for PostgresFacilityRepository {
             _ => {
                 if has_search_term {
                     if has_geo {
-                        // Include proximity in ranking: up to 5 bonus points, decaying over ~50 km
-                        builder.push(" ORDER BY (fts_rank * 10 + name_sim * 5 + GREATEST(0.0, 5.0 - dist_meters / 10000.0)) DESC, trust_score DESC");
+                        builder.push(&format!(
+                            " ORDER BY (fts_rank * {FTS_RANK_WEIGHT} + name_sim * {NAME_SIM_WEIGHT} + GREATEST(0.0, {GEO_PROXIMITY_MAX_BONUS} - dist_meters / {GEO_PROXIMITY_DECAY_METERS})) DESC, trust_score DESC",
+                        ));
                     } else {
-                        builder.push(
-                            " ORDER BY (fts_rank * 10 + name_sim * 5) DESC, trust_score DESC",
-                        );
+                        builder.push(&format!(
+                            " ORDER BY (fts_rank * {FTS_RANK_WEIGHT} + name_sim * {NAME_SIM_WEIGHT}) DESC, trust_score DESC",
+                        ));
                     }
                 } else {
                     builder.push(" ORDER BY trust_score DESC, updated_at DESC");
@@ -619,6 +635,53 @@ impl FacilityRepository for PostgresFacilityRepository {
         };
 
         Ok((facilities, total_count, slice_counts))
+    }
+
+    async fn top_picks(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(Facility, FacilityVoteSummary)>, RepositoryError> {
+        let capped = limit.clamp(1, 50) as i64;
+        let rows = sqlx::query(
+            r#"
+            SELECT f.id, f.source_id, f.name, f.address, f.city, f.state,
+                   f.postal_code, f.latitude, f.longitude, f.jurisdiction,
+                   f.trust_score, f.inspections, f.updated_at,
+                   v.likes, v.dislikes
+            FROM facilities f
+            INNER JOIN (
+                SELECT facility_id,
+                       COALESCE(SUM(CASE WHEN vote = 1 THEN 1 ELSE 0 END), 0) AS likes,
+                       COALESCE(SUM(CASE WHEN vote = -1 THEN 1 ELSE 0 END), 0) AS dislikes
+                FROM facility_votes
+                GROUP BY facility_id
+                HAVING SUM(CASE WHEN vote = 1 THEN 1 ELSE 0 END) > 0
+            ) v ON f.id = v.facility_id
+            ORDER BY v.likes DESC,
+                     (v.likes - v.dislikes) DESC,
+                     f.trust_score DESC,
+                     f.updated_at DESC
+            LIMIT $1
+            "#,
+        )
+        .bind(capped)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(to_repository_error)?;
+
+        let mut results = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let facility = map_facility_row(row)?;
+            let likes: i64 = row.get("likes");
+            let dislikes: i64 = row.get("dislikes");
+            let votes = FacilityVoteSummary {
+                likes: likes.max(0) as u64,
+                dislikes: dislikes.max(0) as u64,
+            };
+            results.push((facility, votes));
+        }
+
+        Ok(results)
     }
 
     async fn autocomplete(

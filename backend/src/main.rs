@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
         ingestion_service: ingestion_service.clone(),
         vote_service: Arc::new(VoteService::new(repository)),
         vote_rate_limiter: VoteRateLimiter::new(20, Duration::from_secs(60)),
+        autocomplete_rate_limiter: VoteRateLimiter::new(60, Duration::from_secs(60)),
     };
 
     let app = app_router(app_state, &settings);

@@ -40,4 +40,8 @@ pub trait FacilityRepository: Send + Sync {
         prefix: &str,
         limit: usize,
     ) -> Result<Vec<AutocompleteSuggestion>, RepositoryError>;
+    async fn top_picks(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(Facility, FacilityVoteSummary)>, RepositoryError>;
 }

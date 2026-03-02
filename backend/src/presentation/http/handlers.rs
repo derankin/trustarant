@@ -191,17 +191,27 @@ pub async fn record_vote(
 
 pub async fn autocomplete(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<AutocompleteParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let prefix = params.q.unwrap_or_default();
-    if prefix.trim().is_empty() {
+    let trimmed = prefix.trim();
+    if trimmed.len() < 2 {
         return Ok(Json(serde_json::json!({ "data": [] })));
+    }
+
+    let client_key = extract_voter_key(&headers);
+    if !state.autocomplete_rate_limiter.allow(&client_key).await {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate limit exceeded, please try again shortly".to_owned(),
+        ));
     }
 
     let limit = params.limit.unwrap_or(8).clamp(1, 20);
     let suggestions = state
         .directory_service
-        .autocomplete(prefix.trim(), limit)
+        .autocomplete(trimmed, limit)
         .await
         .map_err(internal_error)?;
 

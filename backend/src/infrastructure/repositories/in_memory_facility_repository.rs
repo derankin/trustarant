@@ -212,8 +212,10 @@ impl FacilityRepository for InMemoryFacilityRepository {
         match sort.as_deref() {
             Some("recent_desc") => {
                 facilities.sort_by(|a, b| {
-                    b.updated_at
-                        .cmp(&a.updated_at)
+                    let a_latest = a.inspections.iter().map(|i| i.inspected_at).max();
+                    let b_latest = b.inspections.iter().map(|i| i.inspected_at).max();
+                    b_latest
+                        .cmp(&a_latest)
                         .then(b.trust_score.cmp(&a.trust_score))
                 });
             }
@@ -232,6 +234,47 @@ impl FacilityRepository for InMemoryFacilityRepository {
         let page_facilities = facilities.into_iter().skip(offset).take(page_size).collect();
 
         Ok((page_facilities, total_count, slice_counts))
+    }
+
+    async fn top_picks(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(Facility, FacilityVoteSummary)>, RepositoryError> {
+        let capped = limit.clamp(1, 50);
+        let facilities = self.facilities.read().await;
+        let all_votes = self.votes.read().await;
+
+        let mut vote_map: HashMap<String, FacilityVoteSummary> = HashMap::new();
+        for ((fid, _), vote) in all_votes.iter() {
+            let summary = vote_map.entry(fid.clone()).or_default();
+            match vote {
+                VoteValue::Like => summary.likes += 1,
+                VoteValue::Dislike => summary.dislikes += 1,
+            }
+        }
+
+        let mut ranked: Vec<(Facility, FacilityVoteSummary)> = facilities
+            .iter()
+            .map(|f| {
+                let votes = vote_map.get(&f.id).cloned().unwrap_or_default();
+                (f.clone(), votes)
+            })
+            .collect();
+
+        ranked.retain(|(_, v)| v.likes > 0);
+        if ranked.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        ranked.sort_by(|(lf, lv), (rf, rv)| {
+            rv.likes
+                .cmp(&lv.likes)
+                .then(rv.score().cmp(&lv.score()))
+                .then(rf.trust_score.cmp(&lf.trust_score))
+                .then(rf.updated_at.cmp(&lf.updated_at))
+        });
+
+        Ok(ranked.into_iter().take(capped).collect())
     }
 
     async fn autocomplete(
