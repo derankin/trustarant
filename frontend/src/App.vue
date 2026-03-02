@@ -5,8 +5,6 @@ import {
   ThumbsUp16,
   Search16,
   LocationCurrent16,
-  Map16,
-  List16,
   Restaurant16,
   Filter16,
   ChevronLeft16,
@@ -76,7 +74,6 @@ type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
 type VoteType = 'like' | 'dislike'
 type LocationState = 'default' | 'requesting' | 'granted' | 'denied' | 'unsupported'
 type GeoOptions = PositionOptions
-type ViewMode = 'list' | 'map'
 
 const GEO_ERROR_PERMISSION_DENIED = 1
 const GEO_ERROR_POSITION_UNAVAILABLE = 2
@@ -99,7 +96,6 @@ const jurisdictionFilter = ref('all')
 const sortMode = ref<SortMode>('trust_desc')
 const scoreSlice = ref<ScoreSlice>('all')
 const recentOnly = ref(false)
-const viewMode = ref<ViewMode>('list')
 const filtersExpanded = ref(false)
 
 const userLocation = ref<{ latitude: number; longitude: number; accuracy: number } | null>(null)
@@ -826,24 +822,9 @@ const initializeMap = async () => {
   updateMapMarkers()
 }
 
-const switchView = async (mode: ViewMode) => {
-  viewMode.value = mode
-  trackEvent(mode === 'map' ? 'cp_map_expanded' : 'cp_map_collapsed')
-  if (mode === 'map') {
-    await nextTick()
-    if (!mapInstance) {
-      await initializeMap()
-    } else {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const g = (window as any).google
-      g?.maps?.event?.trigger(mapInstance, 'resize')
-      updateMapMarkers()
-    }
-  }
-}
 
 watch(facilities, () => {
-  if (viewMode.value === 'map' && mapInstance) {
+  if (mapInstance) {
     updateMapMarkers()
   }
 })
@@ -857,7 +838,10 @@ onMounted(async () => {
   if (googleMapsApiKey) {
     startupTasks.push(
       loadGoogleMapsScript()
-        .then(() => { mapReady.value = true })
+        .then(() => {
+          mapReady.value = true
+          return nextTick().then(() => initializeMap())
+        })
         .catch(() => { /* map is optional */ })
     )
   }
@@ -989,28 +973,11 @@ onMounted(async () => {
           Showing {{ pageStart }}–{{ pageEnd }}
         </p>
       </div>
-      <div class="cp-view-toggle" v-if="googleMapsApiKey">
-        <button
-          class="cp-view-btn"
-          :class="{ 'cp-view-btn--active': viewMode === 'list' }"
-          @click="switchView('list')"
-          aria-label="List view"
-        >
-          <List16 />
-        </button>
-        <button
-          class="cp-view-btn"
-          :class="{ 'cp-view-btn--active': viewMode === 'map' }"
-          @click="switchView('map')"
-          aria-label="Map view"
-        >
-          <Map16 />
-        </button>
-      </div>
+      <!-- view toggle removed: map + results always visible -->
     </section>
 
     <!-- ─── Map view ─── -->
-    <section v-if="viewMode === 'map' && googleMapsApiKey" class="cp-map-section">
+    <section v-if="googleMapsApiKey" class="cp-map-section">
       <div ref="mapContainerRef" class="cp-map"></div>
     </section>
 
@@ -1126,7 +1093,7 @@ onMounted(async () => {
     </section>
 
     <!-- ─── Community favorites ─── -->
-    <section v-if="viewMode === 'list'" class="cp-panel cp-favorites">
+    <section class="cp-panel cp-favorites">
       <header class="cp-section-head">
         <h2 class="cp-section-title">
           <StarFilled16 class="cp-section-icon" /> Community Favorites
