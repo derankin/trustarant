@@ -438,7 +438,7 @@ impl FacilityRepository for PostgresFacilityRepository {
             .unwrap_or(false);
         let has_geo = query.latitude.is_some() && query.longitude.is_some();
 
-        let page_size = query.page_size.unwrap_or(50).clamp(1, 200);
+        let page_size = query.page_size.or(query.limit).unwrap_or(50).clamp(1, 200);
         let page = query.page.unwrap_or(1).max(1);
         let offset = (page - 1).saturating_mul(page_size);
 
