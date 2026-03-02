@@ -45,5 +45,7 @@ steps:
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/backend:$SHORT_SHA
 
+serviceAccount: projects/cleanplated/serviceAccounts/cloudbuild-deployer@cleanplated.iam.gserviceaccount.com
+
 options:
   logging: CLOUD_LOGGING_ONLY
