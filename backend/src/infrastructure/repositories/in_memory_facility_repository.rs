@@ -13,6 +13,9 @@ use crate::domain::{
     repositories::FacilityRepository,
 };
 
+const ELITE_THRESHOLD: u8 = 90;
+const SOLID_THRESHOLD: u8 = 80;
+
 #[derive(Default)]
 pub struct InMemoryFacilityRepository {
     facilities: RwLock<Vec<Facility>>,
@@ -182,12 +185,12 @@ impl FacilityRepository for InMemoryFacilityRepository {
         // Compute slice counts BEFORE score_slice filter
         let slice_counts = ScoreSliceCounts {
             all: facilities.len(),
-            elite: facilities.iter().filter(|f| f.trust_score >= 90).count(),
+            elite: facilities.iter().filter(|f| f.trust_score >= ELITE_THRESHOLD).count(),
             solid: facilities
                 .iter()
-                .filter(|f| f.trust_score >= 80 && f.trust_score < 90)
+                .filter(|f| f.trust_score >= SOLID_THRESHOLD && f.trust_score < ELITE_THRESHOLD)
                 .count(),
-            watch: facilities.iter().filter(|f| f.trust_score < 80).count(),
+            watch: facilities.iter().filter(|f| f.trust_score < SOLID_THRESHOLD).count(),
         };
 
         // Score slice filter
@@ -197,9 +200,9 @@ impl FacilityRepository for InMemoryFacilityRepository {
             .map(|v| v.trim().to_ascii_lowercase())
         {
             match slice.as_str() {
-                "elite" => facilities.retain(|f| f.trust_score >= 90),
-                "solid" => facilities.retain(|f| f.trust_score >= 80 && f.trust_score < 90),
-                "watch" => facilities.retain(|f| f.trust_score < 80),
+                "elite" => facilities.retain(|f| f.trust_score >= ELITE_THRESHOLD),
+                "solid" => facilities.retain(|f| f.trust_score >= SOLID_THRESHOLD && f.trust_score < ELITE_THRESHOLD),
+                "watch" => facilities.retain(|f| f.trust_score < SOLID_THRESHOLD),
                 _ => {}
             }
         }

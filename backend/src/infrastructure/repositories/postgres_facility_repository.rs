@@ -17,12 +17,17 @@ use crate::domain::{
 const FTS_RANK_WEIGHT: f64 = 10.0;
 /// Trigram name similarity weight in composite scoring formula.
 const NAME_SIM_WEIGHT: f64 = 5.0;
-/// Maximum geo-proximity bonus points (decays over ~50 km).
+/// Maximum geo-proximity bonus points.
 const GEO_PROXIMITY_MAX_BONUS: f64 = 5.0;
-/// Distance in meters at which geo-proximity bonus fully decays.
+/// Decay rate for geo-proximity bonus. Bonus reaches zero at
+/// `MAX_BONUS * DECAY_METERS` (50 km with current values).
 const GEO_PROXIMITY_DECAY_METERS: f64 = 10000.0;
 /// Minimum trigram similarity threshold for fuzzy text matching.
 const TRIGRAM_SIMILARITY_THRESHOLD: f64 = 0.15;
+/// Trust score threshold: scores >= this are "elite".
+const ELITE_THRESHOLD: i16 = 90;
+/// Trust score threshold: scores >= this (and < ELITE) are "solid".
+const SOLID_THRESHOLD: i16 = 80;
 
 pub struct PostgresFacilityRepository {
     pool: PgPool,
@@ -272,6 +277,14 @@ impl FacilityRepository for PostgresFacilityRepository {
             }
         }
 
+        // Remove votes for facilities that no longer exist after re-ingestion.
+        sqlx::query(
+            "DELETE FROM facility_votes WHERE facility_id NOT IN (SELECT id FROM facilities)",
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(to_repository_error)?;
+
         transaction.commit().await.map_err(to_repository_error)?;
         Ok(())
     }
@@ -510,7 +523,8 @@ impl FacilityRepository for PostgresFacilityRepository {
             }
         }
 
-        // Recent-only filter: use latest inspection date, not updated_at
+        // Recent-only filter: use latest inspection date, not updated_at.
+        // Facilities with no inspections are excluded (MAX returns NULL → filtered out).
         if query.recent_only.unwrap_or(false) {
             builder.push(
                 " AND (SELECT MAX((elem->>'inspected_at')::timestamptz) FROM jsonb_array_elements(f.inspections) AS elem) >= NOW() - INTERVAL '90 days'",
@@ -521,9 +535,13 @@ impl FacilityRepository for PostgresFacilityRepository {
         builder.push(")");
 
         // ─── counts CTE: pre-slice totals (always available) ───
-        builder.push(
-            ", counts AS (SELECT COUNT(*) AS all_count, COUNT(*) FILTER(WHERE trust_score >= 90) AS elite_count, COUNT(*) FILTER(WHERE trust_score >= 80 AND trust_score < 90) AS solid_count, COUNT(*) FILTER(WHERE trust_score < 80) AS watch_count FROM scored)",
-        );
+        builder.push(&format!(
+            ", counts AS (SELECT COUNT(*) AS all_count, \
+             COUNT(*) FILTER(WHERE trust_score >= {ELITE_THRESHOLD}) AS elite_count, \
+             COUNT(*) FILTER(WHERE trust_score >= {SOLID_THRESHOLD} AND trust_score < {ELITE_THRESHOLD}) AS solid_count, \
+             COUNT(*) FILTER(WHERE trust_score < {SOLID_THRESHOLD}) AS watch_count \
+             FROM scored)",
+        ));
 
         // ─── sliced CTE: apply score_slice filter ───
         builder.push(", sliced AS (SELECT * FROM scored WHERE 1=1");
@@ -533,9 +551,9 @@ impl FacilityRepository for PostgresFacilityRepository {
             .map(|v| v.trim().to_ascii_lowercase())
         {
             match slice.as_str() {
-                "elite" => { builder.push(" AND trust_score >= 90"); }
-                "solid" => { builder.push(" AND trust_score >= 80 AND trust_score < 90"); }
-                "watch" => { builder.push(" AND trust_score < 80"); }
+                "elite" => { builder.push(&format!(" AND trust_score >= {ELITE_THRESHOLD}")); }
+                "solid" => { builder.push(&format!(" AND trust_score >= {SOLID_THRESHOLD} AND trust_score < {ELITE_THRESHOLD}")); }
+                "watch" => { builder.push(&format!(" AND trust_score < {SOLID_THRESHOLD}")); }
                 _ => {}
             }
         }
@@ -562,6 +580,7 @@ impl FacilityRepository for PostgresFacilityRepository {
             }
             _ => {
                 if has_search_term {
+                    // Safety: all interpolated values are compile-time Rust constants, not user input.
                     if has_geo {
                         builder.push(&format!(
                             " ORDER BY (fts_rank * {FTS_RANK_WEIGHT} + name_sim * {NAME_SIM_WEIGHT} + GREATEST(0.0, {GEO_PROXIMITY_MAX_BONUS} - dist_meters / {GEO_PROXIMITY_DECAY_METERS})) DESC, trust_score DESC",
@@ -607,7 +626,7 @@ impl FacilityRepository for PostgresFacilityRepository {
         let mut facilities = Vec::with_capacity(rows.len());
 
         for row in &rows {
-            // Always extract counts from the first row (present even when page is empty)
+            // CROSS JOIN guarantees at least one row with counts even when the page is empty.
             if facilities.is_empty() && all_count == 0 {
                 let ac: i64 = row.get("all_count");
                 let ec: i64 = row.get("elite_count");

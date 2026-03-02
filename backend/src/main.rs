@@ -15,7 +15,7 @@ use infrastructure::{
     repositories::{InMemoryFacilityRepository, PostgresFacilityRepository},
     scheduler,
 };
-use presentation::http::{AppState, rate_limit::VoteRateLimiter, routes::build_router};
+use presentation::http::{AppState, rate_limit::RateLimiter, routes::build_router};
 use tokio::net::TcpListener;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info, warn};
@@ -72,8 +72,8 @@ async fn main() -> anyhow::Result<()> {
         directory_service: Arc::new(DirectoryService::new(repository.clone())),
         ingestion_service: ingestion_service.clone(),
         vote_service: Arc::new(VoteService::new(repository)),
-        vote_rate_limiter: VoteRateLimiter::new(20, Duration::from_secs(60)),
-        autocomplete_rate_limiter: VoteRateLimiter::new(60, Duration::from_secs(60)),
+        vote_rate_limiter: RateLimiter::new(20, Duration::from_secs(60)),
+        autocomplete_rate_limiter: RateLimiter::new(60, Duration::from_secs(60)),
     };
 
     let app = app_router(app_state, &settings);
