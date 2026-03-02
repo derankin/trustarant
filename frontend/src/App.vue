@@ -192,6 +192,20 @@ const resultsSummary = computed(() => {
   return `${totalMatches.value.toLocaleString()} ${noun} found`
 })
 
+const paginationPages = computed(() => {
+  const total = totalPages.value
+  const current = currentPage.value
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+  const pages: (number | '...')[] = [1]
+  const start = Math.max(2, current - 1)
+  const end = Math.min(total - 1, current + 1)
+  if (start > 2) pages.push('...')
+  for (let i = start; i <= end; i++) pages.push(i)
+  if (end < total - 1) pages.push('...')
+  pages.push(total)
+  return pages
+})
+
 const activeFilterCount = computed(() => {
   let count = 0
   if (jurisdictionFilter.value !== 'all') count++
@@ -218,6 +232,8 @@ const topTenRanked = computed(() =>
     return right.trust_score - left.trust_score
   }),
 )
+
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 const scoreColor = (score: number) => {
   if (score >= 90) return 'score--excellent'
@@ -735,11 +751,11 @@ const updateMapMarkers = () => {
       const band = scoreBandMeta(f.trust_score)
       mapInfoWindow.setContent(
         `<div style="font-family:IBM Plex Sans,sans-serif;max-width:220px;padding:4px 0">` +
-        `<strong style="font-size:14px">${f.name}</strong>` +
-        `<div style="color:#525252;font-size:12px;margin-top:2px">${f.address}, ${f.city}</div>` +
+        `<strong style="font-size:14px">${escHtml(f.name)}</strong>` +
+        `<div style="color:#525252;font-size:12px;margin-top:2px">${escHtml(f.address)}, ${escHtml(f.city)}</div>` +
         `<div style="margin-top:6px;display:inline-flex;align-items:center;gap:6px">` +
         `<span style="background:${pinColor};color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600">${f.trust_score}</span>` +
-        `<span style="font-size:12px;color:#525252">${band.label}</span>` +
+        `<span style="font-size:12px;color:#525252">${escHtml(band.label)}</span>` +
         `</div></div>`
       )
       mapInfoWindow.open(mapInstance, marker)
@@ -1052,24 +1068,17 @@ onMounted(async () => {
         >
           <ChevronLeft16 />
         </button>
-        <button
-          v-for="p in Math.min(totalPages, 5)"
-          :key="p"
-          class="cp-page-btn"
-          :class="{ 'cp-page-btn--active': p === currentPage }"
-          @click="goToPage(p)"
-        >
-          {{ p }}
-        </button>
-        <span v-if="totalPages > 5" class="cp-pagination__ellipsis">…</span>
-        <button
-          v-if="totalPages > 5"
-          class="cp-page-btn"
-          :class="{ 'cp-page-btn--active': totalPages === currentPage }"
-          @click="goToPage(totalPages)"
-        >
-          {{ totalPages }}
-        </button>
+        <template v-for="(p, idx) in paginationPages" :key="idx">
+          <span v-if="p === '...'" class="cp-pagination__ellipsis">…</span>
+          <button
+            v-else
+            class="cp-page-btn"
+            :class="{ 'cp-page-btn--active': p === currentPage }"
+            @click="goToPage(p)"
+          >
+            {{ p }}
+          </button>
+        </template>
         <button
           class="cp-page-btn"
           :disabled="currentPage >= totalPages"
