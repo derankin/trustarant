@@ -17,6 +17,7 @@ import {
   Information16,
   CheckmarkFilled16,
   WarningAltFilled16,
+  Location16,
 } from '@carbon/icons-vue'
 import { trackEvent } from './lib/analytics'
 
@@ -831,29 +832,26 @@ onMounted(async () => {
 
       <!-- ─── Search bar ─── -->
       <form class="cp-search" @submit.prevent="onSearchSubmit">
-        <div class="cp-search__bar">
-          <Search16 class="cp-search__icon" />
-          <input
-            v-model="search"
-            type="text"
-            class="cp-search__input"
-            placeholder="Restaurant name, address, or ZIP"
-            aria-label="Search restaurants"
-          />
-        </div>
+        <cv-search
+          v-model="search"
+          size="lg"
+          placeholder="Restaurant name, address, or ZIP"
+          label="Search restaurants"
+          :form-item="false"
+          class="cp-search__input"
+        />
         <div class="cp-search__actions">
-          <button type="submit" class="cp-btn cp-btn--primary">
-            <Search16 /> Search
-          </button>
-          <button
-            type="button"
-            class="cp-btn cp-btn--secondary"
+          <cv-button kind="primary" :icon="Search16" @click="onSearchSubmit">
+            Search
+          </cv-button>
+          <cv-button
+            kind="tertiary"
+            :icon="Location16"
             :disabled="locationState === 'requesting'"
-            @click.prevent.stop="requestBrowserLocation"
+            @click="requestBrowserLocation"
           >
-            <LocationCurrent16 />
             {{ locationState === 'requesting' ? 'Finding...' : 'Near me' }}
-          </button>
+          </cv-button>
         </div>
         <p class="cp-search__context">
           <LocationCurrent16 class="cp-search__context-icon" />
@@ -984,9 +982,9 @@ onMounted(async () => {
         <WarningAltFilled16 class="cp-empty__icon cp-empty__icon--error" />
         <p class="cp-empty__title">Something went wrong</p>
         <p class="cp-empty__subtitle">{{ error }}</p>
-        <button class="cp-btn cp-btn--secondary" @click="fetchFacilities(true)">
-          <Renew16 /> Try again
-        </button>
+        <cv-button kind="secondary" :icon="Renew16" @click="fetchFacilities(true)">
+          Try again
+        </cv-button>
       </div>
 
       <!-- Empty state -->
