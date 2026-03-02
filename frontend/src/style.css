@@ -892,8 +892,6 @@ body {
    ═══════════════════════════════════════════════════ */
 .cp-footer {
   width: 100%;
-  max-width: var(--cp-shell-max);
-  margin: 0 auto;
 }
 
 .cp-footer__inner {
@@ -901,15 +899,6 @@ body {
   text-align: center;
   background: var(--cp-gray-100);
   color: var(--cp-white);
-}
-
-@media (min-width: 481px) {
-  .cp-footer {
-    margin-bottom: var(--sp-6);
-  }
-  .cp-footer__inner {
-    border-radius: 0 0 16px 16px;
-  }
 }
 
 .cp-footer__brand {
