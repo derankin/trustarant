@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use chrono::{Duration, Utc};
 use tokio::sync::RwLock;
 
 use crate::{
@@ -124,9 +125,14 @@ impl FacilityRepository for InMemoryFacilityRepository {
         &self,
         query: &FacilitySearchQuery,
     ) -> Result<(Vec<Facility>, usize, ScoreSliceCounts), RepositoryError> {
+        let has_search_term = query
+            .q
+            .as_ref()
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
         let mut facilities = self.facilities.read().await.clone();
 
-        // Basic text filtering
+        // Text filtering
         if let Some(term) = query.q.as_ref().map(|v| v.trim().to_ascii_lowercase()) {
             if !term.is_empty() {
                 facilities.retain(|f| {
@@ -152,6 +158,30 @@ impl FacilityRepository for InMemoryFacilityRepository {
             }
         }
 
+        // Geo-radius filter (only in browse mode, not text search)
+        if !has_search_term {
+            if let (Some(lat), Some(lon), Some(radius)) =
+                (query.latitude, query.longitude, query.radius_miles)
+            {
+                facilities
+                    .retain(|f| haversine_miles(lat, lon, f.latitude, f.longitude) <= radius);
+            }
+        }
+
+        // Recent-only filter: use latest inspection date
+        if query.recent_only.unwrap_or(false) {
+            let cutoff = Utc::now() - Duration::days(90);
+            facilities.retain(|f| {
+                f.inspections
+                    .iter()
+                    .map(|i| i.inspected_at)
+                    .max()
+                    .map(|latest| latest >= cutoff)
+                    .unwrap_or(false)
+            });
+        }
+
+        // Compute slice counts BEFORE score_slice filter
         let slice_counts = ScoreSliceCounts {
             all: facilities.len(),
             elite: facilities.iter().filter(|f| f.trust_score >= 90).count(),
@@ -162,6 +192,7 @@ impl FacilityRepository for InMemoryFacilityRepository {
             watch: facilities.iter().filter(|f| f.trust_score < 80).count(),
         };
 
+        // Score slice filter
         if let Some(slice) = query
             .score_slice
             .as_ref()
@@ -175,9 +206,27 @@ impl FacilityRepository for InMemoryFacilityRepository {
             }
         }
 
-        facilities.sort_by(|a, b| b.trust_score.cmp(&a.trust_score));
+        // Sorting
+        let sort = query
+            .sort
+            .as_ref()
+            .map(|v| v.trim().to_ascii_lowercase());
+        match sort.as_deref() {
+            Some("recent_desc") => {
+                facilities.sort_by(|a, b| {
+                    b.updated_at
+                        .cmp(&a.updated_at)
+                        .then(b.trust_score.cmp(&a.trust_score))
+                });
+            }
+            Some("name_asc") => {
+                facilities.sort_by(|a, b| a.name.cmp(&b.name));
+            }
+            _ => {
+                facilities.sort_by(|a, b| b.trust_score.cmp(&a.trust_score));
+            }
+        }
 
-        // total_count reflects post-slice-filter count (matches number of paginated results)
         let total_count = facilities.len();
         let page_size = query.page_size.or(query.limit).unwrap_or(50).clamp(1, 200);
         let page = query.page.unwrap_or(1).max(1);
@@ -215,4 +264,14 @@ impl FacilityRepository for InMemoryFacilityRepository {
 
         Ok(suggestions)
     }
+}
+
+fn haversine_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let r = 3958.8;
+    let d_lat = (lat2 - lat1).to_radians();
+    let d_lon = (lon2 - lon1).to_radians();
+    let a = (d_lat / 2.0).sin().powi(2)
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (d_lon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+    r * c
 }

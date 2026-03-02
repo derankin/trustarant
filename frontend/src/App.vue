@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ThumbsDown16,
   ThumbsUp16,
@@ -127,7 +127,9 @@ const jurisdictionOptions = [
 
 const suggestions = ref<AutocompleteSuggestion[]>([])
 const showSuggestions = ref(false)
+const focusedSuggestionIndex = ref(-1)
 let autocompleteTimer: ReturnType<typeof setTimeout> | null = null
+let autocompleteController: AbortController | null = null
 
 const googleMapsApiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || ''
 const mapReady = ref(false)
@@ -323,27 +325,34 @@ const distanceLabel = (facility: FacilitySummary) => {
 }
 
 async function fetchSuggestions(query: string) {
+  if (autocompleteController) autocompleteController.abort()
+
   const trimmed = query.trim()
   if (trimmed.length < 2) {
     suggestions.value = []
     showSuggestions.value = false
     return
   }
+
+  autocompleteController = new AbortController()
   try {
     const response = await fetch(
       `${apiBaseUrl}/api/v1/facilities/autocomplete?q=${encodeURIComponent(trimmed)}&limit=8`,
+      { signal: autocompleteController.signal },
     )
     if (!response.ok) return
     const payload = await response.json()
     suggestions.value = payload.data ?? []
     showSuggestions.value = suggestions.value.length > 0
-  } catch {
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return
     suggestions.value = []
     showSuggestions.value = false
   }
 }
 
 const onSearchInput = () => {
+  focusedSuggestionIndex.value = -1
   if (autocompleteTimer) clearTimeout(autocompleteTimer)
   autocompleteTimer = setTimeout(() => {
     void fetchSuggestions(search.value)
@@ -354,6 +363,7 @@ const selectSuggestion = (suggestion: AutocompleteSuggestion) => {
   search.value = suggestion.name
   showSuggestions.value = false
   suggestions.value = []
+  focusedSuggestionIndex.value = -1
   trackEvent('cp_autocomplete_selected', {
     suggestion_id: suggestion.id,
     suggestion_name: suggestion.name,
@@ -364,7 +374,29 @@ const selectSuggestion = (suggestion: AutocompleteSuggestion) => {
 const dismissSuggestions = () => {
   setTimeout(() => {
     showSuggestions.value = false
+    focusedSuggestionIndex.value = -1
   }, 200)
+}
+
+const onSearchKeydown = (event: KeyboardEvent) => {
+  if (!showSuggestions.value || suggestions.value.length === 0) return
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    focusedSuggestionIndex.value = Math.min(
+      focusedSuggestionIndex.value + 1,
+      suggestions.value.length - 1,
+    )
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    focusedSuggestionIndex.value = Math.max(focusedSuggestionIndex.value - 1, -1)
+  } else if (event.key === 'Enter' && focusedSuggestionIndex.value >= 0) {
+    event.preventDefault()
+    selectSuggestion(suggestions.value[focusedSuggestionIndex.value])
+  } else if (event.key === 'Escape') {
+    showSuggestions.value = false
+    focusedSuggestionIndex.value = -1
+  }
 }
 
 const withVoteDefaults = (facility: FacilitySummary): FacilitySummary => {
@@ -591,11 +623,9 @@ async function fetchFacilities(resetPage = false) {
       watch: 0,
     }
 
-    if (currentPage.value > totalPages.value) {
+    if (currentPage.value > totalPages.value && totalPages.value >= 1) {
       currentPage.value = totalPages.value
-      if (totalMatches.value > 0) {
-        await fetchFacilities()
-      }
+      await fetchFacilities()
     }
     trackEvent('cp_search_results_loaded', {
       total_count: totalMatches.value,
@@ -906,6 +936,11 @@ onMounted(async () => {
   }
   await Promise.all(startupTasks)
 })
+
+onUnmounted(() => {
+  if (autocompleteTimer) clearTimeout(autocompleteTimer)
+  if (autocompleteController) autocompleteController.abort()
+})
 </script>
 
 <template>
@@ -934,15 +969,27 @@ onMounted(async () => {
             label="Search restaurants"
             :form-item="false"
             class="cp-search__input"
+            role="combobox"
+            aria-autocomplete="list"
+            :aria-expanded="showSuggestions && suggestions.length > 0"
             @input="onSearchInput"
+            @keydown="onSearchKeydown"
             @focus="() => { if (suggestions.length > 0) showSuggestions = true }"
             @blur="dismissSuggestions"
           />
-          <ul v-if="showSuggestions && suggestions.length > 0" class="cp-suggestions">
+          <ul
+            v-if="showSuggestions && suggestions.length > 0"
+            class="cp-suggestions"
+            role="listbox"
+            aria-label="Search suggestions"
+          >
             <li
-              v-for="s in suggestions"
+              v-for="(s, index) in suggestions"
               :key="s.id"
               class="cp-suggestions__item"
+              :class="{ 'cp-suggestions__item--focused': index === focusedSuggestionIndex }"
+              role="option"
+              :aria-selected="index === focusedSuggestionIndex"
               @mousedown.prevent="selectSuggestion(s)"
             >
               <span class="cp-suggestions__name">{{ s.name }}</span>

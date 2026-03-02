@@ -49,6 +49,19 @@ impl Jurisdiction {
             _ => None,
         }
     }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label.to_ascii_lowercase().as_str() {
+            "los angeles county" => Some(Self::LosAngelesCounty),
+            "san diego county" => Some(Self::SanDiegoCounty),
+            "long beach" => Some(Self::LongBeach),
+            "riverside county" => Some(Self::RiversideCounty),
+            "san bernardino county" => Some(Self::SanBernardinoCounty),
+            "orange county" => Some(Self::OrangeCounty),
+            "pasadena" => Some(Self::Pasadena),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

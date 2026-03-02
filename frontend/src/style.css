@@ -273,7 +273,8 @@ body {
   border-bottom: none;
 }
 
-.cp-suggestions__item:hover {
+.cp-suggestions__item:hover,
+.cp-suggestions__item--focused {
   background: var(--cp-surface-hover);
 }
 

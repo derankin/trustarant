@@ -275,7 +275,7 @@ impl FacilityRepository for PostgresFacilityRepository {
         .await
         .map_err(to_repository_error)?;
 
-        rows.into_iter().map(map_facility_row).collect()
+        rows.iter().map(map_facility_row).collect()
     }
 
     async fn get_by_id(&self, id: &str) -> Result<Option<Facility>, RepositoryError> {
@@ -287,7 +287,7 @@ impl FacilityRepository for PostgresFacilityRepository {
         .await
         .map_err(to_repository_error)?;
 
-        maybe_row.map(map_facility_row).transpose()
+        maybe_row.as_ref().map(map_facility_row).transpose()
     }
 
     async fn set_system_ingestion_status(
@@ -427,6 +427,7 @@ impl FacilityRepository for PostgresFacilityRepository {
             .as_ref()
             .map(|v| !v.trim().is_empty())
             .unwrap_or(false);
+        let has_geo = query.latitude.is_some() && query.longitude.is_some();
 
         let page_size = query.page_size.or(query.limit).unwrap_or(50).clamp(1, 200);
         let page = query.page.unwrap_or(1).max(1);
@@ -434,81 +435,46 @@ impl FacilityRepository for PostgresFacilityRepository {
 
         let mut builder = QueryBuilder::<Postgres>::new("");
 
+        // ─── scored CTE: text search or geo browse ───
         if has_search_term {
             let term = query.q.as_ref().unwrap().trim();
-            // Text search mode: FTS + trigram fuzzy matching
-            builder.push(
-                r#"
-                WITH scored AS (
-                    SELECT f.*,
-                        ts_rank(f.search_vector, plainto_tsquery('english', "#,
-            );
+            builder.push("WITH scored AS (SELECT f.*, ts_rank(f.search_vector, plainto_tsquery('english', ");
             builder.push_bind(term);
-            builder.push(
-                r#")) AS fts_rank,
-                        similarity(f.name, "#,
-            );
+            builder.push(")) AS fts_rank, similarity(f.name, ");
             builder.push_bind(term);
             builder.push(") AS name_sim");
 
-            // If geo coords are provided, add distance as ranking signal
-            if let (Some(lat), Some(lon)) = (query.latitude, query.longitude) {
-                builder.push(
-                    r#",
-                        earth_distance(ll_to_earth(f.latitude, f.longitude), ll_to_earth("#,
-                );
-                builder.push_bind(lat);
+            if has_geo {
+                builder.push(", earth_distance(ll_to_earth(f.latitude, f.longitude), ll_to_earth(");
+                builder.push_bind(query.latitude.unwrap());
                 builder.push(", ");
-                builder.push_bind(lon);
+                builder.push_bind(query.longitude.unwrap());
                 builder.push(")) AS dist_meters");
             }
 
-            builder.push(
-                r#"
-                    FROM facilities f
-                    WHERE (
-                        f.search_vector @@ plainto_tsquery('english', "#,
-            );
+            builder.push(" FROM facilities f WHERE (f.search_vector @@ plainto_tsquery('english', ");
             builder.push_bind(term);
-            builder.push(
-                r#")
-                        OR similarity(f.name, "#,
-            );
+            builder.push(") OR similarity(f.name, ");
             builder.push_bind(term);
             builder.push(") > 0.15)");
         } else {
-            // Geo browse mode
-            builder.push(
-                r#"
-                WITH scored AS (
-                    SELECT f.*, 0::real AS fts_rank, 0::real AS name_sim"#,
-            );
+            builder.push("WITH scored AS (SELECT f.*, 0::real AS fts_rank, 0::real AS name_sim");
 
-            if let (Some(lat), Some(lon)) = (query.latitude, query.longitude) {
-                builder.push(
-                    r#",
-                        earth_distance(ll_to_earth(f.latitude, f.longitude), ll_to_earth("#,
-                );
-                builder.push_bind(lat);
+            if has_geo {
+                builder.push(", earth_distance(ll_to_earth(f.latitude, f.longitude), ll_to_earth(");
+                builder.push_bind(query.latitude.unwrap());
                 builder.push(", ");
-                builder.push_bind(lon);
+                builder.push_bind(query.longitude.unwrap());
                 builder.push(")) AS dist_meters");
             }
 
-            builder.push(
-                r#"
-                    FROM facilities f
-                    WHERE 1=1"#,
-            );
+            builder.push(" FROM facilities f WHERE 1=1");
 
             if let (Some(lat), Some(lon), Some(radius)) =
                 (query.latitude, query.longitude, query.radius_miles)
             {
                 let radius_meters = radius.max(0.1) * 1609.344;
-                builder.push(
-                    r#"
-                        AND earth_distance(ll_to_earth(f.latitude, f.longitude), ll_to_earth("#,
-                );
+                builder.push(" AND earth_distance(ll_to_earth(f.latitude, f.longitude), ll_to_earth(");
                 builder.push_bind(lat);
                 builder.push(", ");
                 builder.push_bind(lon);
@@ -517,89 +483,82 @@ impl FacilityRepository for PostgresFacilityRepository {
             }
         }
 
-        // Jurisdiction filter
+        // Jurisdiction filter — resolve labels to codes via Jurisdiction enum
         if let Some(jurisdiction) = query
             .jurisdiction
             .as_ref()
             .map(|v| v.trim().to_ascii_lowercase())
         {
             if !jurisdiction.is_empty() && jurisdiction != "all" {
-                // Support both jurisdiction codes (e.g. "lac") and labels (e.g. "Los Angeles County")
-                builder.push(" AND (LOWER(f.jurisdiction) = ");
-                builder.push_bind(jurisdiction.clone());
-                builder.push(" OR LOWER(f.jurisdiction) = ");
-                // Try to map label to code for backward compatibility
-                let code = match jurisdiction.as_str() {
-                    "los angeles county" => "lac",
-                    "san diego county" => "sdc",
-                    "long beach" => "lb",
-                    "riverside county" => "riv",
-                    "san bernardino county" => "sbc",
-                    "orange county" => "oc",
-                    "pasadena" => "pas",
-                    other => other,
-                };
-                builder.push_bind(code.to_owned());
-                builder.push(")");
+                let code = Jurisdiction::from_code(&jurisdiction)
+                    .or_else(|| Jurisdiction::from_label(&jurisdiction))
+                    .map(|j| j.code().to_owned())
+                    .unwrap_or(jurisdiction);
+                builder.push(" AND LOWER(f.jurisdiction) = ");
+                builder.push_bind(code);
             }
         }
 
-        // Recent-only filter
+        // Recent-only filter: use latest inspection date, not updated_at
         if query.recent_only.unwrap_or(false) {
-            builder.push(" AND f.updated_at >= NOW() - INTERVAL '90 days'");
+            builder.push(
+                " AND (SELECT MAX((elem->>'inspected_at')::timestamptz) FROM jsonb_array_elements(f.inspections) AS elem) >= NOW() - INTERVAL '90 days'",
+            );
         }
 
-        // Close the scored CTE, compute slice counts from the full unfiltered set,
-        // then apply score_slice filter so slice counts reflect pre-filter totals.
+        // Close scored CTE
+        builder.push(")");
+
+        // ─── counts CTE: pre-slice totals (always available) ───
         builder.push(
-            r#"
-            ), counts AS (
-                SELECT
-                    COUNT(*) AS all_count,
-                    COUNT(*) FILTER(WHERE trust_score >= 90) AS elite_count,
-                    COUNT(*) FILTER(WHERE trust_score >= 80 AND trust_score < 90) AS solid_count,
-                    COUNT(*) FILTER(WHERE trust_score < 80) AS watch_count
-                FROM scored
-            )
-            SELECT s.*, c.all_count, c.elite_count, c.solid_count, c.watch_count,
-                COUNT(*) OVER() AS total_count
-            FROM scored s, counts c
-            WHERE 1=1"#,
+            ", counts AS (SELECT COUNT(*) AS all_count, COUNT(*) FILTER(WHERE trust_score >= 90) AS elite_count, COUNT(*) FILTER(WHERE trust_score >= 80 AND trust_score < 90) AS solid_count, COUNT(*) FILTER(WHERE trust_score < 80) AS watch_count FROM scored)",
         );
 
-        // Score slice filter (applied in outer query; slice counts from CTE are pre-filter)
+        // ─── sliced CTE: apply score_slice filter ───
+        builder.push(", sliced AS (SELECT * FROM scored WHERE 1=1");
         if let Some(slice) = query
             .score_slice
             .as_ref()
             .map(|v| v.trim().to_ascii_lowercase())
         {
             match slice.as_str() {
-                "elite" => builder.push(" AND s.trust_score >= 90"),
-                "solid" => builder.push(" AND s.trust_score >= 80 AND s.trust_score < 90"),
-                "watch" => builder.push(" AND s.trust_score < 80"),
+                "elite" => { builder.push(" AND trust_score >= 90"); }
+                "solid" => { builder.push(" AND trust_score >= 80 AND trust_score < 90"); }
+                "watch" => { builder.push(" AND trust_score < 80"); }
                 _ => {}
-            };
+            }
         }
+        builder.push(")");
 
-        // Sorting
+        // ─── sliced_total CTE: pagination total after score_slice ───
+        builder.push(", sliced_total AS (SELECT COUNT(*) AS total_count FROM sliced)");
+
+        // ─── page CTE: ordering + pagination ───
+        builder.push(", page AS (SELECT * FROM sliced");
+
         let sort = query
             .sort
             .as_ref()
             .map(|v| v.trim().to_ascii_lowercase());
         match sort.as_deref() {
             Some("recent_desc") => {
-                builder.push(" ORDER BY s.updated_at DESC, s.trust_score DESC");
+                builder.push(" ORDER BY updated_at DESC, trust_score DESC");
             }
             Some("name_asc") => {
-                builder.push(" ORDER BY s.name ASC");
+                builder.push(" ORDER BY name ASC");
             }
             _ => {
                 if has_search_term {
-                    builder.push(
-                        " ORDER BY (s.fts_rank * 10 + s.name_sim * 5) DESC, s.trust_score DESC",
-                    );
+                    if has_geo {
+                        // Include proximity in ranking: up to 5 bonus points, decaying over ~50 km
+                        builder.push(" ORDER BY (fts_rank * 10 + name_sim * 5 + GREATEST(0.0, 5.0 - dist_meters / 10000.0)) DESC, trust_score DESC");
+                    } else {
+                        builder.push(
+                            " ORDER BY (fts_rank * 10 + name_sim * 5) DESC, trust_score DESC",
+                        );
+                    }
                 } else {
-                    builder.push(" ORDER BY s.trust_score DESC, s.updated_at DESC");
+                    builder.push(" ORDER BY trust_score DESC, updated_at DESC");
                 }
             }
         }
@@ -608,6 +567,17 @@ impl FacilityRepository for PostgresFacilityRepository {
         builder.push_bind(page_size as i64);
         builder.push(" OFFSET ");
         builder.push_bind(offset as i64);
+        builder.push(")");
+
+        // ─── Final SELECT: LEFT JOIN guarantees counts even when page is empty ───
+        builder.push(concat!(
+            " SELECT p.id, p.source_id, p.name, p.address, p.city, p.state,",
+            " p.postal_code, p.latitude, p.longitude, p.jurisdiction,",
+            " p.trust_score, p.inspections, p.updated_at,",
+            " c.all_count, c.elite_count, c.solid_count, c.watch_count,",
+            " st.total_count",
+            " FROM counts c CROSS JOIN sliced_total st LEFT JOIN page p ON true",
+        ));
 
         let rows = builder
             .build()
@@ -623,19 +593,24 @@ impl FacilityRepository for PostgresFacilityRepository {
         let mut facilities = Vec::with_capacity(rows.len());
 
         for row in &rows {
-            if facilities.is_empty() {
-                let tc: i64 = row.get("total_count");
+            // Always extract counts from the first row (present even when page is empty)
+            if facilities.is_empty() && all_count == 0 {
                 let ac: i64 = row.get("all_count");
                 let ec: i64 = row.get("elite_count");
                 let sc: i64 = row.get("solid_count");
                 let wc: i64 = row.get("watch_count");
-                total_count = tc.max(0) as usize;
+                let tc: i64 = row.get("total_count");
+                all_count = ac.max(0) as usize;
                 elite_count = ec.max(0) as usize;
                 solid_count = sc.max(0) as usize;
                 watch_count = wc.max(0) as usize;
-                all_count = ac.max(0) as usize;
+                total_count = tc.max(0) as usize;
             }
-            facilities.push(map_facility_row_ref(row)?);
+            // LEFT JOIN produces NULL facility columns when the page has no rows
+            let maybe_id: Option<String> = row.get("id");
+            if maybe_id.is_some() {
+                facilities.push(map_facility_row(row)?);
+            }
         }
 
         let slice_counts = ScoreSliceCounts {
@@ -653,16 +628,19 @@ impl FacilityRepository for PostgresFacilityRepository {
         prefix: &str,
         limit: usize,
     ) -> Result<Vec<AutocompleteSuggestion>, RepositoryError> {
-        let like_pattern = format!("%{}%", prefix.replace('%', "\\%").replace('_', "\\_"));
-        let prefix_pattern = format!("{}%", prefix.replace('%', "\\%").replace('_', "\\_"));
+        let escaped = prefix.replace('%', "\\%").replace('_', "\\_");
+        let prefix_pattern = format!("{}%", escaped);
         let capped_limit = limit.clamp(1, 20) as i64;
 
+        // name % $1 uses pg_trgm GIN index for fuzzy matching.
+        // ILIKE with prefix pattern uses GIN trgm index for exact prefix.
         let rows = sqlx::query(
             r#"
             SELECT id, name, city, postal_code, trust_score,
                    similarity(name, $1) AS sim
             FROM facilities
-            WHERE name ILIKE $2
+            WHERE name % $1
+               OR name ILIKE $2
                OR city ILIKE $2
                OR postal_code LIKE $3
             ORDER BY sim DESC, trust_score DESC
@@ -670,7 +648,7 @@ impl FacilityRepository for PostgresFacilityRepository {
             "#,
         )
         .bind(prefix)
-        .bind(&like_pattern)
+        .bind(&prefix_pattern)
         .bind(&prefix_pattern)
         .bind(capped_limit)
         .fetch_all(&self.pool)
@@ -695,45 +673,16 @@ impl FacilityRepository for PostgresFacilityRepository {
     }
 }
 
-fn map_facility_row_ref(row: &sqlx::postgres::PgRow) -> Result<Facility, RepositoryError> {
+fn map_facility_row(row: &sqlx::postgres::PgRow) -> Result<Facility, RepositoryError> {
     let jurisdiction_code: String = row.get("jurisdiction");
     let inspections_json: serde_json::Value = row.get("inspections");
     let trust_score_raw: i16 = row.get("trust_score");
 
-    let jurisdiction = Jurisdiction::from_code(&jurisdiction_code).ok_or_else(|| {
-        RepositoryError::message(format!("unknown jurisdiction code: {jurisdiction_code}"))
-    })?;
-
-    let inspections: Vec<Inspection> =
-        serde_json::from_value(inspections_json).map_err(|error| {
-            RepositoryError::message(format!("unable to decode inspections: {error}"))
+    let jurisdiction = Jurisdiction::from_code(&jurisdiction_code)
+        .or_else(|| Jurisdiction::from_label(&jurisdiction_code))
+        .ok_or_else(|| {
+            RepositoryError::message(format!("unknown jurisdiction: {jurisdiction_code}"))
         })?;
-
-    Ok(Facility {
-        id: row.get("id"),
-        source_id: row.get("source_id"),
-        name: row.get("name"),
-        address: row.get("address"),
-        city: row.get("city"),
-        state: row.get("state"),
-        postal_code: row.get("postal_code"),
-        latitude: row.get("latitude"),
-        longitude: row.get("longitude"),
-        jurisdiction,
-        trust_score: u8::try_from(trust_score_raw).unwrap_or(0),
-        inspections,
-        updated_at: row.get("updated_at"),
-    })
-}
-
-fn map_facility_row(row: sqlx::postgres::PgRow) -> Result<Facility, RepositoryError> {
-    let jurisdiction_code: String = row.get("jurisdiction");
-    let inspections_json: serde_json::Value = row.get("inspections");
-    let trust_score_raw: i16 = row.get("trust_score");
-
-    let jurisdiction = Jurisdiction::from_code(&jurisdiction_code).ok_or_else(|| {
-        RepositoryError::message(format!("unknown jurisdiction code: {jurisdiction_code}"))
-    })?;
 
     let inspections: Vec<Inspection> =
         serde_json::from_value(inspections_json).map_err(|error| {
