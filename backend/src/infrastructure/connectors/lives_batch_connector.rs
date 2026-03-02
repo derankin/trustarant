@@ -33,23 +33,23 @@ impl Default for LivesBatchConnector {
 
 impl LivesBatchConnector {
     pub fn from_env() -> Self {
-        let san_bernardino_url = env::var("TRUSTARANT_SBC_ARCGIS_URL")
+        let san_bernardino_url = env::var("CLEANPLATED_SBC_ARCGIS_URL")
             .unwrap_or_else(|_| DEFAULT_SAN_BERNARDINO_ARCGIS_URL.to_owned());
-        let riverside_url = env::var("TRUSTARANT_RIVERSIDE_ARCGIS_URL")
+        let riverside_url = env::var("CLEANPLATED_RIVERSIDE_ARCGIS_URL")
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
-        let page_size = env::var("TRUSTARANT_LIVES_PAGE_SIZE")
+        let page_size = env::var("CLEANPLATED_LIVES_PAGE_SIZE")
             .ok()
-            .or_else(|| env::var("TRUSTARANT_LIVES_LIMIT").ok())
+            .or_else(|| env::var("CLEANPLATED_LIVES_LIMIT").ok())
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_PAGE_SIZE)
             .max(1);
-        let max_records = env::var("TRUSTARANT_LIVES_MAX_RECORDS")
+        let max_records = env::var("CLEANPLATED_LIVES_MAX_RECORDS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0);
-        let timeout_secs = env::var("TRUSTARANT_LIVES_TIMEOUT_SECS")
+        let timeout_secs = env::var("CLEANPLATED_LIVES_TIMEOUT_SECS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(DEFAULT_TIMEOUT_SECS);

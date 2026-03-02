@@ -61,62 +61,62 @@ impl Default for CpraConnector {
 
 impl CpraConnector {
     pub fn from_env() -> Self {
-        let orange_county_url = env::var("TRUSTARANT_OC_CPRA_EXPORT_URL")
+        let orange_county_url = env::var("CLEANPLATED_OC_CPRA_EXPORT_URL")
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
-        let pasadena_url = env::var("TRUSTARANT_PASADENA_CPRA_EXPORT_URL")
+        let pasadena_url = env::var("CLEANPLATED_PASADENA_CPRA_EXPORT_URL")
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
-        let timeout_secs = env::var("TRUSTARANT_CPRA_TIMEOUT_SECS")
+        let timeout_secs = env::var("CLEANPLATED_CPRA_TIMEOUT_SECS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
-        let oc_live_enabled = parse_bool_env("TRUSTARANT_OC_LIVE_ENABLED", true);
-        let oc_live_endpoint = env::var("TRUSTARANT_OC_LIVE_ENDPOINT")
+        let oc_live_enabled = parse_bool_env("CLEANPLATED_OC_LIVE_ENABLED", true);
+        let oc_live_endpoint = env::var("CLEANPLATED_OC_LIVE_ENDPOINT")
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| DEFAULT_OC_LIVE_ENDPOINT.to_owned());
-        let oc_live_path = env::var("TRUSTARANT_OC_LIVE_PATH")
+        let oc_live_path = env::var("CLEANPLATED_OC_LIVE_PATH")
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| DEFAULT_OC_LIVE_PATH.to_owned());
         let oc_live_search_terms = parse_search_terms(
-            env::var("TRUSTARANT_OC_LIVE_SEARCH_TERMS").ok(),
+            env::var("CLEANPLATED_OC_LIVE_SEARCH_TERMS").ok(),
             default_orange_county_search_terms(),
         );
-        let oc_live_page_size = env::var("TRUSTARANT_OC_LIVE_PAGE_SIZE")
+        let oc_live_page_size = env::var("CLEANPLATED_OC_LIVE_PAGE_SIZE")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_OC_LIVE_PAGE_SIZE);
-        let oc_live_max_records = env::var("TRUSTARANT_OC_LIVE_MAX_RECORDS")
+        let oc_live_max_records = env::var("CLEANPLATED_OC_LIVE_MAX_RECORDS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_OC_LIVE_MAX_RECORDS);
-        let oc_live_per_term_max_records = env::var("TRUSTARANT_OC_LIVE_PER_TERM_MAX_RECORDS")
+        let oc_live_per_term_max_records = env::var("CLEANPLATED_OC_LIVE_PER_TERM_MAX_RECORDS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_OC_LIVE_PER_TERM_MAX_RECORDS);
-        let oc_live_days_window = env::var("TRUSTARANT_OC_LIVE_DAYS_WINDOW")
+        let oc_live_days_window = env::var("CLEANPLATED_OC_LIVE_DAYS_WINDOW")
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(DEFAULT_OC_LIVE_DAYS_WINDOW);
 
-        let pasadena_live_enabled = parse_bool_env("TRUSTARANT_PASADENA_LIVE_ENABLED", true);
-        let pasadena_directory_url = env::var("TRUSTARANT_PASADENA_DIRECTORY_URL")
+        let pasadena_live_enabled = parse_bool_env("CLEANPLATED_PASADENA_LIVE_ENABLED", true);
+        let pasadena_directory_url = env::var("CLEANPLATED_PASADENA_DIRECTORY_URL")
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| DEFAULT_PASADENA_DIRECTORY_URL.to_owned());
-        let pasadena_page_size = env::var("TRUSTARANT_PASADENA_PAGE_SIZE")
+        let pasadena_page_size = env::var("CLEANPLATED_PASADENA_PAGE_SIZE")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_PASADENA_PAGE_SIZE);
-        let pasadena_max_records = env::var("TRUSTARANT_PASADENA_MAX_RECORDS")
+        let pasadena_max_records = env::var("CLEANPLATED_PASADENA_MAX_RECORDS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_PASADENA_MAX_RECORDS);
@@ -632,7 +632,7 @@ impl HealthDataConnector for CpraConnector {
         if facilities.is_empty() {
             if !source_enabled {
                 anyhow::bail!(
-                    "CPRA connector not configured and live fallbacks disabled (set TRUSTARANT_OC_CPRA_EXPORT_URL and/or TRUSTARANT_PASADENA_CPRA_EXPORT_URL)"
+                    "CPRA connector not configured and live fallbacks disabled (set CLEANPLATED_OC_CPRA_EXPORT_URL and/or CLEANPLATED_PASADENA_CPRA_EXPORT_URL)"
                 );
             }
             if errors.is_empty() {

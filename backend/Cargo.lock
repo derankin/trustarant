@@ -2561,7 +2561,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "trustarant-backend"
+name = "cleanplated-backend"
 version = "0.1.0"
 dependencies = [
  "anyhow",

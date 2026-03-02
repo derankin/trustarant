@@ -3,7 +3,7 @@
 This setup uses a two-step Terraform flow:
 
 1. `bootstrap/` creates:
-   - a new GCP project (name: `trustarant`)
+   - a new GCP project (name: `cleanplated`)
    - required APIs
    - a remote state bucket
 2. `environments/prod/` provisions runtime resources:
@@ -51,7 +51,7 @@ After first apply creates the secret container, add your Neon connection string 
 
 ```bash
 PROJECT_ID=<project_id>
-SECRET_ID=trustarant-database-url
+SECRET_ID=cleanplated-database-url
 
 printf '%s' 'postgresql://...neon-url...' | \
   gcloud secrets versions add "${SECRET_ID}" \
@@ -67,8 +67,8 @@ PROJECT_ID=<project_id>
 REGION=us-west1
 
 gcloud auth configure-docker ${REGION}-docker.pkg.dev
-docker build -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/frontend:latest .
-docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/frontend:latest
+docker build -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/cleanplated/frontend:latest .
+docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/cleanplated/frontend:latest
 ```
 
 ## 5) Build and push backend image
@@ -80,8 +80,8 @@ REGION=us-west1
 
 gcloud auth configure-docker ${REGION}-docker.pkg.dev
 
-docker build -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/backend:latest .
-docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/trustarant/backend:latest
+docker build -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/cleanplated/backend:latest .
+docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/cleanplated/backend:latest
 ```
 
 Then rerun `terraform apply` in `environments/prod` with `backend_image` and `frontend_image` set.

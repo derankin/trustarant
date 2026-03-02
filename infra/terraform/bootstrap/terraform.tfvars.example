@@ -1,5 +1,5 @@
 billing_account = "0194FA-243C5D-DDD04B"
-project_name    = "trustarant"
-project_id_prefix = "trustarant"
+project_name    = "cleanplated"
+project_id_prefix = "cleanplated"
 region          = "us-west1"
 state_bucket_location = "US"
