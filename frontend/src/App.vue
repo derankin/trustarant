@@ -131,6 +131,8 @@ let mapInstance: any = null
 let mapMarkers: any[] = []
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mapInfoWindow: any = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let radiusCircle: any = null
 
 const resolveApiBaseUrl = () => {
   const configured = import.meta.env.VITE_API_BASE_URL
@@ -767,6 +769,39 @@ const updateMapMarkers = () => {
     mapInstance.fitBounds(bounds)
     if (mapMarkers.length === 1) mapInstance.setZoom(15)
   }
+  updateRadiusCircle(bounds, hasCoords)
+}
+
+const updateRadiusCircle = (
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  bounds?: any,
+  extendBounds = false,
+) => {
+  if (radiusCircle) {
+    radiusCircle.setMap(null)
+    radiusCircle = null
+  }
+  if (!mapInstance || hasKeywordQuery.value) return
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = (window as any).google
+  const center = { lat: activeCenter.value.latitude, lng: activeCenter.value.longitude }
+  const radiusMeters = radiusMiles.value * 1609.344
+  radiusCircle = new g.maps.Circle({
+    map: mapInstance,
+    center,
+    radius: radiusMeters,
+    fillColor: '#24a148',
+    fillOpacity: 0.08,
+    strokeColor: '#24a148',
+    strokeWeight: 1.5,
+    strokeOpacity: 0.4,
+    clickable: false,
+    zIndex: 0,
+  })
+  if (extendBounds && bounds) {
+    bounds.union(radiusCircle.getBounds())
+    mapInstance.fitBounds(bounds)
+  }
 }
 
 const initializeMap = async () => {
@@ -980,7 +1015,7 @@ onMounted(async () => {
     </section>
 
     <!-- ─── Results list ─── -->
-    <section v-if="viewMode === 'list'" class="cp-results">
+    <section class="cp-results">
       <!-- Loading skeletons -->
       <template v-if="loading">
         <div v-for="n in 4" :key="n" class="cp-card cp-card--skeleton">
@@ -1055,7 +1090,7 @@ onMounted(async () => {
     </section>
 
     <!-- ─── Pagination ─── -->
-    <section v-if="totalMatches > 0 && viewMode === 'list' && !loading" class="cp-pagination">
+    <section v-if="totalMatches > 0 && !loading" class="cp-pagination">
       <p class="cp-pagination__info">
         Page {{ currentPage }} of {{ totalPages }} · {{ pageSize }} per page
       </p>
@@ -1091,7 +1126,7 @@ onMounted(async () => {
     </section>
 
     <!-- ─── Community favorites ─── -->
-    <section class="cp-panel cp-favorites">
+    <section v-if="viewMode === 'list'" class="cp-panel cp-favorites">
       <header class="cp-section-head">
         <h2 class="cp-section-title">
           <StarFilled16 class="cp-section-icon" /> Community Favorites
