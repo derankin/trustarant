@@ -134,7 +134,7 @@ services:
     environment:
       GA_MEASUREMENT_ID: ${GA_MEASUREMENT_ID:-}
     ports:
-      - "15173:80"
+      - "15173:8080"
     depends_on:
       - backend
 

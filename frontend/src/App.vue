@@ -1,6 +1,24 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { ThumbsDown16, ThumbsUp16 } from '@carbon/icons-vue'
+import {
+  ThumbsDown16,
+  ThumbsUp16,
+  Search16,
+  LocationCurrent16,
+  Map16,
+  List16,
+  Restaurant16,
+  Filter16,
+  ChevronLeft16,
+  ChevronRight16,
+  Renew16,
+  Star16,
+  StarFilled16,
+  Information16,
+  CheckmarkFilled16,
+  WarningAltFilled16,
+  Location16,
+} from '@carbon/icons-vue'
 import { trackEvent } from './lib/analytics'
 
 type FacilitySummary = {
@@ -57,8 +75,8 @@ type SortMode = 'trust_desc' | 'recent_desc' | 'name_asc'
 type ScoreSlice = 'all' | 'elite' | 'solid' | 'watch'
 type VoteType = 'like' | 'dislike'
 type LocationState = 'default' | 'requesting' | 'granted' | 'denied' | 'unsupported'
-type PaginationChange = { start: number; page: number; length: number }
 type GeoOptions = PositionOptions
+type ViewMode = 'list' | 'map'
 
 const GEO_ERROR_PERMISSION_DENIED = 1
 const GEO_ERROR_POSITION_UNAVAILABLE = 2
@@ -81,18 +99,19 @@ const jurisdictionFilter = ref('all')
 const sortMode = ref<SortMode>('trust_desc')
 const scoreSlice = ref<ScoreSlice>('all')
 const recentOnly = ref(false)
+const viewMode = ref<ViewMode>('list')
+const filtersExpanded = ref(false)
 
 const userLocation = ref<{ latitude: number; longitude: number; accuracy: number } | null>(null)
 const locationState = ref<LocationState>('default')
-const locationMessage = ref('Using Southern California default center (Downtown Los Angeles).')
+const locationMessage = ref('Browsing near Downtown Los Angeles')
 
 const currentPage = ref(1)
 const pageSize = ref(12)
 const topTenFacilities = ref<FacilitySummary[]>([])
 const voteInFlight = ref<Record<string, boolean>>({})
-const pageSizeChoices = [12, 24, 48]
 const jurisdictionOptions = [
-  { label: 'All jurisdictions', value: 'all' },
+  { label: 'All areas', value: 'all' },
   { label: 'Los Angeles County', value: 'Los Angeles County' },
   { label: 'San Diego County', value: 'San Diego County' },
   { label: 'Orange County', value: 'Orange County' },
@@ -104,13 +123,14 @@ const jurisdictionOptions = [
 ]
 
 const googleMapsApiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || ''
-const mapExpanded = ref(false)
 const mapReady = ref(false)
 const mapContainerRef = ref<HTMLElement | null>(null)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mapInstance: any = null
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mapMarkers: any[] = []
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mapInfoWindow: any = null
 
 const resolveApiBaseUrl = () => {
   const configured = import.meta.env.VITE_API_BASE_URL
@@ -144,7 +164,7 @@ const activeCenter = computed(() => {
     return {
       latitude: userLocation.value.latitude,
       longitude: userLocation.value.longitude,
-      label: 'Your current location',
+      label: 'your location',
     }
   }
 
@@ -156,7 +176,6 @@ const activeCenter = computed(() => {
 })
 
 const hasKeywordQuery = computed(() => search.value.trim().length > 0)
-const featured = computed(() => facilities.value[0])
 const totalPages = computed(() => Math.max(1, Math.ceil(totalMatches.value / pageSize.value)))
 const pageStart = computed(() => {
   if (totalMatches.value === 0) return 0
@@ -165,7 +184,37 @@ const pageStart = computed(() => {
 const pageEnd = computed(() =>
   Math.min((currentPage.value - 1) * pageSize.value + facilities.value.length, totalMatches.value),
 )
-const paginationPageSizes = computed(() => pageSizeChoices)
+
+const resultsSummary = computed(() => {
+  if (loading.value) return ''
+  if (totalMatches.value === 0) return 'No restaurants found'
+  const noun = totalMatches.value === 1 ? 'restaurant' : 'restaurants'
+  return `${totalMatches.value.toLocaleString()} ${noun} found`
+})
+
+const paginationPages = computed(() => {
+  const total = totalPages.value
+  const current = currentPage.value
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+  const pages: (number | '...')[] = [1]
+  const start = Math.max(2, current - 1)
+  const end = Math.min(total - 1, current + 1)
+  if (start > 2) pages.push('...')
+  for (let i = start; i <= end; i++) pages.push(i)
+  if (end < total - 1) pages.push('...')
+  pages.push(total)
+  return pages
+})
+
+const activeFilterCount = computed(() => {
+  let count = 0
+  if (jurisdictionFilter.value !== 'all') count++
+  if (scoreSlice.value !== 'all') count++
+  if (recentOnly.value) count++
+  if (sortMode.value !== 'trust_desc') count++
+  return count
+})
+
 const topTenRanked = computed(() =>
   [...topTenFacilities.value].sort((left, right) => {
     const leftLikes = left.likes ?? 0
@@ -184,10 +233,24 @@ const topTenRanked = computed(() =>
   }),
 )
 
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+const scoreColor = (score: number) => {
+  if (score >= 90) return 'score--excellent'
+  if (score >= 80) return 'score--good'
+  return 'score--needs-attention'
+}
+
+const scoreLabel = (score: number) => {
+  if (score >= 90) return 'Excellent'
+  if (score >= 80) return 'Good'
+  return 'Needs attention'
+}
+
 const scoreBandMeta = (score: number) => {
-  if (score >= 90) return { label: 'Elite', className: 'score-chip--elite' }
-  if (score >= 80) return { label: 'Solid', className: 'score-chip--solid' }
-  return { label: 'Watch', className: 'score-chip--watch' }
+  if (score >= 90) return { label: 'Excellent', className: 'score-chip--elite' }
+  if (score >= 80) return { label: 'Good', className: 'score-chip--solid' }
+  return { label: 'Needs attention', className: 'score-chip--watch' }
 }
 
 watch([jurisdictionFilter, sortMode, scoreSlice, recentOnly], () => {
@@ -201,7 +264,7 @@ watch([jurisdictionFilter, sortMode, scoreSlice, recentOnly], () => {
 })
 
 const lastRefreshLabel = computed(() => {
-  if (!ingestionStats.value?.last_refresh_at) return 'Awaiting first successful ingestion'
+  if (!ingestionStats.value?.last_refresh_at) return 'Updating...'
   return new Date(ingestionStats.value.last_refresh_at).toLocaleString()
 })
 
@@ -209,25 +272,20 @@ const connectorRows = computed(() => ingestionStats.value?.connector_stats ?? []
 
 const formatSourceName = (source: string) => {
   const labels: Record<string, string> = {
-    la_county_open_data: 'Los Angeles County Open Data',
-    san_diego_socrata: 'San Diego Socrata API',
-    long_beach_closures_page: 'Long Beach Public Health',
-    lives_batch_riv_sbc: 'Riverside + San Bernardino LIVES/ArcGIS',
-    cpra_import_orange_pasadena: 'Orange County + Pasadena Public Records/Portal',
+    la_county_open_data: 'Los Angeles County',
+    san_diego_socrata: 'San Diego County',
+    long_beach_closures_page: 'City of Long Beach',
+    lives_batch_riv_sbc: 'Riverside & San Bernardino',
+    cpra_import_orange_pasadena: 'Orange County & Pasadena',
   }
 
   return labels[source] ?? source.replace(/_/g, ' ')
 }
 
-const summarizeConnectorError = (value?: string | null) => {
-  if (!value) return null
-  const firstLine = value.split('\n')[0] ?? value
-  return firstLine.slice(0, 180)
-}
 
 const formatDate = (value?: string) => {
-  if (!value) return 'No date available'
-  return new Date(value).toLocaleDateString()
+  if (!value) return 'Not yet inspected'
+  return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 const haversineMiles = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -300,7 +358,7 @@ const submitVote = async (facilityId: string, vote: VoteType) => {
     })
     if (!response.ok) {
       if (response.status === 429) {
-        error.value = 'Vote limit reached. Please wait a minute before trying again.'
+        error.value = 'You\'re voting too quickly — hang tight and try again in a moment.'
         trackEvent('cp_vote_rate_limited', {
           facility_id: facilityId,
           vote,
@@ -333,7 +391,7 @@ const submitVote = async (facilityId: string, vote: VoteType) => {
     })
     void fetchTopTen()
   } catch (cause) {
-    const message = cause instanceof Error ? cause.message : 'Vote submission failed'
+    const message = cause instanceof Error ? cause.message : 'Something went wrong — please try again.'
     error.value = message
     trackEvent('cp_vote_exception', {
       facility_id: facilityId,
@@ -356,9 +414,9 @@ const isLikelyMobileSafari = () => {
 
 const geolocationPermissionHint = () => {
   if (isLikelyMobileSafari()) {
-    return 'Allow Location for Safari Websites in iOS Settings, then retry.'
+    return 'You can enable it in iOS Settings → Safari → Location.'
   }
-  return 'Allow location access for this site in your browser settings, then retry.'
+  return 'You can enable it in your browser\'s site settings.'
 }
 
 const getCurrentPosition = (options: GeoOptions) =>
@@ -420,15 +478,9 @@ async function fetchTopTen() {
   }
 }
 
-const onPaginationChange = ({ page, length }: PaginationChange) => {
-  const nextPage = Math.max(1, page)
-  const nextPageSize = Math.max(1, length)
-  if (nextPage === currentPage.value && nextPageSize === pageSize.value) {
-    return
-  }
-
-  pageSize.value = nextPageSize
-  currentPage.value = nextPage
+const goToPage = (page: number) => {
+  if (page < 1 || page > totalPages.value || page === currentPage.value) return
+  currentPage.value = page
   trackEvent('cp_pagination_changed', {
     page: currentPage.value,
     page_size: pageSize.value,
@@ -436,10 +488,11 @@ const onPaginationChange = ({ page, length }: PaginationChange) => {
   })
   void fetchFacilities().then(() => {
     nextTick(() => {
-      document.getElementById('directory-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   })
 }
+
 
 const onRadiusChange = (rawValue: string | number) => {
   const parsed = typeof rawValue === 'string' ? Number.parseFloat(rawValue) : rawValue
@@ -466,7 +519,7 @@ async function fetchFacilities(resetPage = false) {
   try {
     const response = await fetch(`${apiBaseUrl}/api/v1/facilities?${query.toString()}`)
     if (!response.ok) {
-      throw new Error(`Failed to fetch facilities (${response.status})`)
+      throw new Error('We couldn\'t load restaurants right now. Please try again.')
     }
 
     const payload: FacilitiesResponse = await response.json()
@@ -503,7 +556,7 @@ async function fetchFacilities(resetPage = false) {
     })
     void fetchTopTen()
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : 'Unexpected fetch error'
+    error.value = cause instanceof Error ? cause.message : 'Something unexpected happened. Please try again.'
     trackEvent('cp_search_results_failed', {
       query_type: classifyQueryTerm(search.value),
       query_length: search.value.trim().length,
@@ -550,7 +603,7 @@ async function fetchIngestionStats() {
     const payload = await response.json()
     ingestionStats.value = payload.data ?? null
   } catch {
-    // Non-blocking metadata panel.
+    // Non-blocking metadata.
   }
 }
 
@@ -561,20 +614,20 @@ async function requestBrowserLocation() {
 
   if (!window.isSecureContext) {
     locationState.value = 'unsupported'
-    locationMessage.value = 'Location requires a secure HTTPS connection.'
+    locationMessage.value = 'Location needs a secure (HTTPS) connection.'
     trackEvent('cp_location_result', { status: 'unsupported_insecure_context' })
     return
   }
 
   if (!('geolocation' in navigator)) {
     locationState.value = 'unsupported'
-    locationMessage.value = 'Browser geolocation is not supported on this device.'
+    locationMessage.value = 'Location isn\'t available on this device.'
     trackEvent('cp_location_result', { status: 'unsupported_browser' })
     return
   }
 
   locationState.value = 'requesting'
-  locationMessage.value = 'Requesting your location...'
+  locationMessage.value = 'Finding your location...'
 
   try {
     let position: GeolocationPosition
@@ -607,7 +660,7 @@ async function requestBrowserLocation() {
       accuracy: position.coords.accuracy,
     }
     locationState.value = 'granted'
-    locationMessage.value = `Using browser location (±${Math.round(position.coords.accuracy)}m accuracy).`
+    locationMessage.value = 'Showing restaurants near you'
     trackEvent('cp_location_result', {
       status: 'granted',
       accuracy_meters: Math.round(position.coords.accuracy),
@@ -618,21 +671,19 @@ async function requestBrowserLocation() {
 
     if (geolocationError?.code === GEO_ERROR_PERMISSION_DENIED) {
       locationState.value = 'denied'
-      locationMessage.value = `Location permission denied. ${geolocationPermissionHint()} Reverting to Southern California default center.`
+      locationMessage.value = `Location access wasn't granted. ${geolocationPermissionHint()} Showing Downtown LA instead.`
       trackEvent('cp_location_result', { status: 'permission_denied' })
     } else if (geolocationError?.code === GEO_ERROR_TIMEOUT) {
       locationState.value = 'default'
-      locationMessage.value =
-        'Location lookup timed out on this network/device. Reverting to Southern California default center.'
+      locationMessage.value = 'Location took too long — showing Downtown LA instead.'
       trackEvent('cp_location_result', { status: 'timeout' })
     } else if (geolocationError?.code === GEO_ERROR_POSITION_UNAVAILABLE) {
       locationState.value = 'default'
-      locationMessage.value =
-        'Location is currently unavailable on this device. Reverting to Southern California default center.'
+      locationMessage.value = 'Couldn\'t determine your location right now. Showing Downtown LA instead.'
       trackEvent('cp_location_result', { status: 'position_unavailable' })
     } else {
       locationState.value = 'default'
-      locationMessage.value = 'Could not determine your location. Reverting to Southern California default center.'
+      locationMessage.value = 'Couldn\'t get your location. Showing Downtown LA instead.'
       trackEvent('cp_location_result', { status: 'unknown_error' })
     }
   }
@@ -663,21 +714,51 @@ const clearMapMarkers = () => {
   mapMarkers = []
 }
 
+const markerColorForScore = (score: number) => {
+  if (score >= 90) return '#24a148' // green
+  if (score >= 80) return '#f1c21b' // yellow
+  return '#da1e28' // red
+}
+
 const updateMapMarkers = () => {
   if (!mapInstance) return
   clearMapMarkers()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const g = (window as any).google
+  if (mapInfoWindow) mapInfoWindow.close()
+  mapInfoWindow = new g.maps.InfoWindow()
   const bounds = new g.maps.LatLngBounds()
   let hasCoords = false
   for (const f of facilities.value) {
     if (!f.latitude || !f.longitude) continue
     hasCoords = true
     const pos = { lat: f.latitude, lng: f.longitude }
+    const pinColor = markerColorForScore(f.trust_score)
     const marker = new g.maps.Marker({
       position: pos,
       map: mapInstance,
-      title: `${f.name} — Trust Score: ${f.trust_score}`,
+      title: f.name,
+      icon: {
+        path: g.maps.SymbolPath.CIRCLE,
+        scale: 8,
+        fillColor: pinColor,
+        fillOpacity: 0.9,
+        strokeColor: '#fff',
+        strokeWeight: 2,
+      },
+    })
+    marker.addListener('click', () => {
+      const band = scoreBandMeta(f.trust_score)
+      mapInfoWindow.setContent(
+        `<div style="font-family:IBM Plex Sans,sans-serif;max-width:220px;padding:4px 0">` +
+        `<strong style="font-size:14px">${escHtml(f.name)}</strong>` +
+        `<div style="color:#525252;font-size:12px;margin-top:2px">${escHtml(f.address)}, ${escHtml(f.city)}</div>` +
+        `<div style="margin-top:6px;display:inline-flex;align-items:center;gap:6px">` +
+        `<span style="background:${pinColor};color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600">${f.trust_score}</span>` +
+        `<span style="font-size:12px;color:#525252">${escHtml(band.label)}</span>` +
+        `</div></div>`
+      )
+      mapInfoWindow.open(mapInstance, marker)
     })
     mapMarkers.push(marker)
     bounds.extend(pos)
@@ -701,14 +782,19 @@ const initializeMap = async () => {
     zoom: 12,
     mapTypeControl: false,
     streetViewControl: false,
+    fullscreenControl: false,
+    styles: [
+      { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+      { featureType: 'transit', stylers: [{ visibility: 'simplified' }] },
+    ],
   })
   updateMapMarkers()
 }
 
-const toggleMap = async () => {
-  mapExpanded.value = !mapExpanded.value
-  if (mapExpanded.value) {
-    trackEvent('cp_map_expanded')
+const switchView = async (mode: ViewMode) => {
+  viewMode.value = mode
+  trackEvent(mode === 'map' ? 'cp_map_expanded' : 'cp_map_collapsed')
+  if (mode === 'map') {
     await nextTick()
     if (!mapInstance) {
       await initializeMap()
@@ -718,13 +804,11 @@ const toggleMap = async () => {
       g?.maps?.event?.trigger(mapInstance, 'resize')
       updateMapMarkers()
     }
-  } else {
-    trackEvent('cp_map_collapsed')
   }
 }
 
 watch(facilities, () => {
-  if (mapExpanded.value && mapInstance) {
+  if (viewMode.value === 'map' && mapInstance) {
     updateMapMarkers()
   }
 })
@@ -747,44 +831,71 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="trust-app">
-    <section class="trust-panel trust-panel--hero">
-      <p class="trust-eyebrow">CleanPlated</p>
-      <h1 class="trust-title">Find safer food, faster.</h1>
-      <p class="trust-lede">
-        Live Southern California restaurant inspection data, normalized into one clear Trust Score.
-      </p>
+  <main class="cp-app">
+    <!-- ─── Hero ─── -->
+    <section class="cp-hero">
+      <div class="cp-hero__logo">
+        <img src="/cleanplated-logo.svg" alt="CleanPlated" width="72" height="72" />
+      </div>
+      <div class="cp-hero__content">
+        <p class="cp-hero__eyebrow">CleanPlated</p>
+        <h1 class="cp-hero__title">Know before you go.</h1>
+        <p class="cp-hero__lede">
+          Real inspection data from across Southern California — so you can
+          dine with confidence and discover top-rated restaurants.
+        </p>
+      </div>
 
-      <form class="trust-form" @submit.prevent="onSearchSubmit">
-        <cv-text-input
+      <!-- ─── Search bar ─── -->
+      <form class="cp-search" @submit.prevent="onSearchSubmit">
+        <cv-search
           v-model="search"
-          label="Search Directory"
-          placeholder="Search by business, address, ZIP, or city"
           size="lg"
-        >
-          <template v-slot:helper-text> Search by restaurant name, address, ZIP code, or city </template>
-        </cv-text-input>
-
-        <div class="trust-actions">
-          <cv-button kind="primary" type="submit">Search</cv-button>
+          placeholder="Restaurant name, address, or ZIP"
+          label="Search restaurants"
+          :form-item="false"
+          class="cp-search__input"
+        />
+        <div class="cp-search__actions">
+          <cv-button kind="primary" :icon="Search16" @click="onSearchSubmit">
+            Search
+          </cv-button>
           <cv-button
-            kind="secondary"
-            type="button"
+            kind="tertiary"
+            :icon="Location16"
             :disabled="locationState === 'requesting'"
-            @click.prevent.stop="requestBrowserLocation"
+            @click="requestBrowserLocation"
           >
-            {{ locationState === 'requesting' ? 'Locating…' : 'Use Browser Location' }}
+            {{ locationState === 'requesting' ? 'Finding...' : 'Near me' }}
           </cv-button>
         </div>
+        <p class="cp-search__context">
+          <LocationCurrent16 class="cp-search__context-icon" />
+          {{ locationMessage }}
+        </p>
       </form>
+    </section>
 
-      <p class="trust-note">{{ locationMessage }}</p>
-      <p class="trust-note">
-        {{ hasKeywordQuery ? 'Keyword mode active (radius ignored).' : `Centering near ${activeCenter.label}.` }}
-      </p>
+    <!-- ─── Quick stats ─── -->
+    <section class="cp-stats">
+      <div class="cp-stat">
+        <span class="cp-stat__value">{{ ingestionStats?.unique_facilities?.toLocaleString() ?? '—' }}</span>
+        <span class="cp-stat__label">Restaurants</span>
+      </div>
+      <div class="cp-stat">
+        <span class="cp-stat__value">{{ sliceCounts.elite.toLocaleString() }}</span>
+        <span class="cp-stat__label">Excellent rated</span>
+      </div>
+      <div class="cp-stat">
+        <span class="cp-stat__value">{{ radiusMiles.toFixed(0) }} mi</span>
+        <span class="cp-stat__label">Search radius</span>
+      </div>
+    </section>
 
+    <!-- ─── Radius slider ─── -->
+    <section v-if="!hasKeywordQuery" class="cp-panel cp-radius">
       <cv-slider
-        label="Search Radius"
+        label="Search radius"
         :model-value="String(radiusMiles)"
         min="0.5"
         max="15"
@@ -795,273 +906,292 @@ onMounted(async () => {
       />
     </section>
 
-    <section class="trust-stats">
-      <cv-tile class="trust-stat-tile">
-        <p class="trust-kicker">Restaurants Indexed</p>
-        <p class="trust-stat">{{ ingestionStats?.unique_facilities?.toLocaleString() ?? '0' }}</p>
-        <p class="trust-note">Current snapshot from the latest ingestion run.</p>
-      </cv-tile>
+    <!-- ─── Filters ─── -->
+    <section class="cp-panel cp-filters-panel">
+      <button class="cp-filters-toggle" @click="filtersExpanded = !filtersExpanded">
+        <Filter16 />
+        <span>Filters</span>
+        <cv-tag v-if="activeFilterCount > 0" :label="String(activeFilterCount)" kind="green" />
+        <ChevronRight16 :class="['cp-filters-chevron', { 'cp-filters-chevron--open': filtersExpanded }]" />
+      </button>
 
-      <cv-tile class="trust-stat-tile">
-        <p class="trust-kicker">Last Ingestion</p>
-        <p class="trust-stat trust-stat--small">{{ lastRefreshLabel }}</p>
-        <p class="trust-note">Search center: {{ activeCenter.label }} · Radius: {{ radiusMiles.toFixed(1) }} mi</p>
-      </cv-tile>
-    </section>
-
-    <section id="data-sources" class="trust-panel">
-      <header class="trust-section-head">
-        <h2 class="trust-heading">Filter Results</h2>
-        <cv-tag :label="`${totalMatches.toLocaleString()} result(s)`" kind="cool-gray" />
-      </header>
-
-      <div class="trust-filters">
-        <cv-select v-model="jurisdictionFilter" label="Jurisdiction">
+      <div v-show="filtersExpanded" class="cp-filters-body">
+        <cv-select v-model="jurisdictionFilter" label="Area" hide-label>
           <cv-select-option v-for="option in jurisdictionOptions" :key="option.value" :value="option.value">
             {{ option.label }}
           </cv-select-option>
         </cv-select>
 
-        <cv-select v-model="sortMode" label="Sort">
-          <cv-select-option value="trust_desc">Trust Score (High to Low)</cv-select-option>
-          <cv-select-option value="recent_desc">Most Recently Inspected</cv-select-option>
-          <cv-select-option value="name_asc">Name (A to Z)</cv-select-option>
+        <cv-select v-model="sortMode" label="Sort by" hide-label>
+          <cv-select-option value="trust_desc">Highest rated</cv-select-option>
+          <cv-select-option value="recent_desc">Recently inspected</cv-select-option>
+          <cv-select-option value="name_asc">Name A–Z</cv-select-option>
         </cv-select>
-      </div>
 
-      <div class="trust-slices">
-        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'all' }" @click="scoreSlice = 'all'">
-          All ({{ sliceCounts.all.toLocaleString() }})
-        </cv-button>
-        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'elite' }" @click="scoreSlice = 'elite'">
-          Elite ({{ sliceCounts.elite.toLocaleString() }})
-        </cv-button>
-        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'solid' }" @click="scoreSlice = 'solid'">
-          Solid ({{ sliceCounts.solid.toLocaleString() }})
-        </cv-button>
-        <cv-button kind="ghost" :class="{ 'slice-active': scoreSlice === 'watch' }" @click="scoreSlice = 'watch'">
-          Watch ({{ sliceCounts.watch.toLocaleString() }})
-        </cv-button>
-      </div>
+        <div class="cp-slices">
+          <button
+            v-for="slice in (['all', 'elite', 'solid', 'watch'] as ScoreSlice[])"
+            :key="slice"
+            class="cp-slice"
+            :class="{ 'cp-slice--active': scoreSlice === slice }"
+            @click="scoreSlice = slice"
+          >
+            {{ slice === 'all' ? 'All' : slice === 'elite' ? 'Excellent' : slice === 'solid' ? 'Good' : 'Needs attention' }}
+            <span class="cp-slice__count">{{ (sliceCounts as Record<string, number>)[slice]?.toLocaleString() ?? '0' }}</span>
+          </button>
+        </div>
 
-      <cv-checkbox v-model="recentOnly" label="Only show inspections from the last 90 days" />
+        <cv-checkbox v-model="recentOnly" label="Inspected in the last 90 days" />
+      </div>
     </section>
 
-    <section v-if="featured" class="trust-panel">
-      <p class="trust-kicker">Top match in current results</p>
-      <h3 class="trust-subheading">{{ featured.name }}</h3>
-      <p class="trust-address">{{ featured.address }}, {{ featured.city }} {{ featured.postal_code }}</p>
-      <div class="trust-tags">
-        <cv-tag :label="featured.jurisdiction" kind="cool-gray" />
-        <cv-tag :label="`${scoreBandMeta(featured.trust_score).label} · ${featured.trust_score}`" kind="green" />
-        <cv-tag v-if="distanceLabel(featured)" :label="distanceLabel(featured) ?? ''" kind="teal" />
+    <!-- ─── Results header ─── -->
+    <section id="results-section" class="cp-results-header">
+      <div class="cp-results-header__summary">
+        <h2 class="cp-results-header__count" v-if="!loading">{{ resultsSummary }}</h2>
+        <div v-else class="cp-skeleton cp-skeleton--text" style="width:140px;height:24px"></div>
+        <p class="cp-results-header__range" v-if="totalMatches > 0 && !loading">
+          Showing {{ pageStart }}–{{ pageEnd }}
+        </p>
       </div>
-      <p class="trust-note">Last inspection: {{ formatDate(featured.latest_inspection_at) }}</p>
+      <div class="cp-view-toggle" v-if="googleMapsApiKey">
+        <button
+          class="cp-view-btn"
+          :class="{ 'cp-view-btn--active': viewMode === 'list' }"
+          @click="switchView('list')"
+          aria-label="List view"
+        >
+          <List16 />
+        </button>
+        <button
+          class="cp-view-btn"
+          :class="{ 'cp-view-btn--active': viewMode === 'map' }"
+          @click="switchView('map')"
+          aria-label="Map view"
+        >
+          <Map16 />
+        </button>
+      </div>
     </section>
 
-    <div class="trust-sections-reorderable" :class="{ 'trust-sections--search-active': hasKeywordQuery }">
-    <section class="trust-panel trust-section-top10">
-      <header class="trust-section-head">
-        <h2 class="trust-heading">Top 10 Most Liked</h2>
-      </header>
-      <p class="trust-note">Ranked by total thumbs up across the community. Add your vote to influence this list.</p>
+    <!-- ─── Map view ─── -->
+    <section v-if="viewMode === 'map' && googleMapsApiKey" class="cp-map-section">
+      <div ref="mapContainerRef" class="cp-map"></div>
+    </section>
 
-      <cv-inline-loading v-if="topTenLoading" state="loading" loading-text="Loading top facilities..." />
-      <cv-inline-notification
-        v-else-if="topTenRanked.length === 0"
-        kind="info"
-        title="No community likes yet"
-        sub-title="Be the first to like a restaurant and shape the Top 10."
-        :hide-close-button="true"
-      />
+    <!-- ─── Results list ─── -->
+    <section v-if="viewMode === 'list'" class="cp-results">
+      <!-- Loading skeletons -->
+      <template v-if="loading">
+        <div v-for="n in 4" :key="n" class="cp-card cp-card--skeleton">
+          <div class="cp-card__body">
+            <div class="cp-skeleton cp-skeleton--text" style="width:70%;height:16px"></div>
+            <div class="cp-skeleton cp-skeleton--text" style="width:90%;height:12px;margin-top:8px"></div>
+            <div class="cp-skeleton cp-skeleton--text" style="width:40%;height:12px;margin-top:8px"></div>
+          </div>
+          <div class="cp-skeleton cp-skeleton--circle"></div>
+        </div>
+      </template>
 
-      <ol v-else class="trust-topten">
-        <li v-for="(facility, index) in topTenRanked" :key="facility.id" class="trust-topten__item">
-          <div class="trust-topten__rank">{{ index + 1 }}</div>
-          <div class="trust-topten__main">
-            <p class="trust-card__title">{{ facility.name }}</p>
-            <p class="trust-address">{{ facility.address }}, {{ facility.city }} {{ facility.postal_code }}</p>
-            <div class="trust-tags">
-              <cv-tag :label="facility.jurisdiction" kind="cool-gray" />
-              <cv-tag :label="`${facility.trust_score}`" kind="green" />
+      <!-- Error state -->
+      <div v-else-if="error" class="cp-empty">
+        <WarningAltFilled16 class="cp-empty__icon cp-empty__icon--error" />
+        <p class="cp-empty__title">Something went wrong</p>
+        <p class="cp-empty__subtitle">{{ error }}</p>
+        <cv-button kind="secondary" :icon="Renew16" @click="fetchFacilities(true)">
+          Try again
+        </cv-button>
+      </div>
+
+      <!-- Empty state -->
+      <div v-else-if="totalMatches === 0 && !loading" class="cp-empty">
+        <Restaurant16 class="cp-empty__icon" />
+        <p class="cp-empty__title">No restaurants match your search</p>
+        <p class="cp-empty__subtitle">
+          Try expanding your search radius, removing filters, or searching by name or ZIP code.
+        </p>
+      </div>
+
+      <!-- Restaurant cards -->
+      <template v-else>
+        <div
+          v-for="facility in facilities"
+          :key="facility.id"
+          class="cp-card"
+        >
+          <div class="cp-card__body">
+            <h3 class="cp-card__name">{{ facility.name }}</h3>
+            <p class="cp-card__address">{{ facility.address }}, {{ facility.city }} {{ facility.postal_code }}</p>
+            <div class="cp-card__meta">
+              <span class="cp-card__meta-item">{{ facility.jurisdiction }}</span>
+              <span v-if="distanceLabel(facility)" class="cp-card__meta-item">{{ distanceLabel(facility) }}</span>
+              <span class="cp-card__meta-item">Inspected {{ formatDate(facility.latest_inspection_at) }}</span>
             </div>
           </div>
-          <div class="trust-topten__actions">
-            <cv-button
-              size="sm"
-              kind="ghost"
-              :aria-label="`Like ${facility.name}`"
+          <div class="cp-card__score" :class="scoreColor(facility.trust_score)">
+            <span class="cp-card__score-value">{{ facility.trust_score }}</span>
+            <span class="cp-card__score-label">{{ scoreLabel(facility.trust_score) }}</span>
+          </div>
+          <div class="cp-card__votes">
+            <button
+              class="cp-vote-btn"
+              :aria-label="`Recommend ${facility.name}`"
               :disabled="isVoting(facility.id)"
               @click="submitVote(facility.id, 'like')"
             >
-              <ThumbsUp16 />
-              <span class="trust-vote-count">{{ facility.likes ?? 0 }}</span>
-            </cv-button>
-            <cv-button
-              size="sm"
-              kind="ghost"
-              :aria-label="`Dislike ${facility.name}`"
+              <ThumbsUp16 /> {{ facility.likes ?? 0 }}
+            </button>
+            <button
+              class="cp-vote-btn"
+              :aria-label="`Not recommended ${facility.name}`"
               :disabled="isVoting(facility.id)"
               @click="submitVote(facility.id, 'dislike')"
             >
-              <ThumbsDown16 />
-              <span class="trust-vote-count">{{ facility.dislikes ?? 0 }}</span>
-            </cv-button>
+              <ThumbsDown16 /> {{ facility.dislikes ?? 0 }}
+            </button>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ─── Pagination ─── -->
+    <section v-if="totalMatches > 0 && viewMode === 'list' && !loading" class="cp-pagination">
+      <p class="cp-pagination__info">
+        Page {{ currentPage }} of {{ totalPages }} · {{ pageSize }} per page
+      </p>
+      <div class="cp-pagination__controls">
+        <button
+          class="cp-page-btn"
+          :disabled="currentPage <= 1"
+          @click="goToPage(currentPage - 1)"
+          aria-label="Previous page"
+        >
+          <ChevronLeft16 />
+        </button>
+        <template v-for="(p, idx) in paginationPages" :key="idx">
+          <span v-if="p === '...'" class="cp-pagination__ellipsis">…</span>
+          <button
+            v-else
+            class="cp-page-btn"
+            :class="{ 'cp-page-btn--active': p === currentPage }"
+            @click="goToPage(p)"
+          >
+            {{ p }}
+          </button>
+        </template>
+        <button
+          class="cp-page-btn"
+          :disabled="currentPage >= totalPages"
+          @click="goToPage(currentPage + 1)"
+          aria-label="Next page"
+        >
+          <ChevronRight16 />
+        </button>
+      </div>
+    </section>
+
+    <!-- ─── Community favorites ─── -->
+    <section class="cp-panel cp-favorites">
+      <header class="cp-section-head">
+        <h2 class="cp-section-title">
+          <StarFilled16 class="cp-section-icon" /> Community Favorites
+        </h2>
+      </header>
+      <p class="cp-section-desc">
+        The most recommended restaurants by the CleanPlated community. Your votes shape this list.
+      </p>
+
+      <!-- Loading skeletons -->
+      <template v-if="topTenLoading">
+        <div v-for="n in 3" :key="n" class="cp-fav cp-fav--skeleton">
+          <div class="cp-skeleton cp-skeleton--circle-sm"></div>
+          <div style="flex:1">
+            <div class="cp-skeleton cp-skeleton--text" style="width:65%;height:14px"></div>
+            <div class="cp-skeleton cp-skeleton--text" style="width:85%;height:11px;margin-top:6px"></div>
+          </div>
+        </div>
+      </template>
+
+      <!-- Empty -->
+      <div v-else-if="topTenRanked.length === 0" class="cp-empty cp-empty--compact">
+        <Star16 class="cp-empty__icon" />
+        <p class="cp-empty__title">No favorites yet</p>
+        <p class="cp-empty__subtitle">Be the first to recommend a restaurant you love.</p>
+      </div>
+
+      <!-- List -->
+      <ol v-else class="cp-fav-list">
+        <li v-for="(facility, index) in topTenRanked" :key="facility.id" class="cp-fav">
+          <div class="cp-fav__rank">{{ index + 1 }}</div>
+          <div class="cp-fav__body">
+            <p class="cp-fav__name">{{ facility.name }}</p>
+            <p class="cp-fav__address">{{ facility.address }}, {{ facility.city }}</p>
+            <div class="cp-fav__tags">
+              <span class="cp-fav__score" :class="scoreColor(facility.trust_score)">{{ facility.trust_score }}</span>
+              <span class="cp-fav__jurisdiction">{{ facility.jurisdiction }}</span>
+            </div>
+          </div>
+          <div class="cp-fav__votes">
+            <button
+              class="cp-vote-btn"
+              :disabled="isVoting(facility.id)"
+              @click="submitVote(facility.id, 'like')"
+              :aria-label="`Recommend ${facility.name}`"
+            >
+              <ThumbsUp16 /> {{ facility.likes ?? 0 }}
+            </button>
           </div>
         </li>
       </ol>
     </section>
 
-    <section id="directory-section" class="trust-panel trust-section-directory">
-      <header class="trust-section-head">
-        <h2 class="trust-heading">Directory</h2>
-        <cv-tag :label="`${totalMatches.toLocaleString()} result(s)`" kind="cool-gray" />
+    <!-- ─── Data sources ─── -->
+    <section id="data-sources" class="cp-panel cp-sources">
+      <header class="cp-section-head">
+        <h2 class="cp-section-title">
+          <Information16 class="cp-section-icon" /> Our Sources
+        </h2>
       </header>
-
-      <p v-if="totalMatches > 0" class="trust-note">
-        Showing {{ pageStart.toLocaleString() }}–{{ pageEnd.toLocaleString() }} of {{ totalMatches.toLocaleString() }}
+      <p class="cp-section-desc">
+        CleanPlated aggregates official public health inspection records from county and city agencies
+        across Southern California — the same data regulators use, made accessible for everyone.
       </p>
 
-      <div v-if="googleMapsApiKey" class="trust-map-panel">
-        <cv-button kind="tertiary" size="sm" @click="toggleMap">
-          {{ mapExpanded ? 'Hide Map' : 'Show Map' }}
-        </cv-button>
-        <div v-show="mapExpanded" class="trust-map-wrap">
-          <div ref="mapContainerRef" class="trust-map"></div>
+      <div class="cp-source-list">
+        <div v-for="connector in connectorRows" :key="connector.source" class="cp-source">
+          <div class="cp-source__header">
+            <CheckmarkFilled16 v-if="!connector.error" class="cp-source__status cp-source__status--ok" />
+            <WarningAltFilled16 v-else class="cp-source__status cp-source__status--warn" />
+            <span class="cp-source__name">{{ formatSourceName(connector.source) }}</span>
+          </div>
+          <span v-if="!connector.error" class="cp-source__count">
+            {{ connector.fetched_records.toLocaleString() }} records
+          </span>
+          <span v-else class="cp-source__error">Temporarily unavailable</span>
         </div>
       </div>
 
-      <cv-inline-loading v-if="loading" state="loading" loading-text="Loading latest trust scores..." />
-      <cv-inline-notification
-        v-else-if="error"
-        kind="error"
-        title="Directory request failed"
-        :sub-title="error"
-        :hide-close-button="true"
-      />
-      <cv-inline-notification
-        v-else-if="totalMatches === 0"
-        kind="info"
-        title="No matching facilities"
-        sub-title="Try a wider radius or fewer filters."
-        :hide-close-button="true"
-      />
-
-      <ul v-else class="trust-directory">
-        <li v-for="facility in facilities" :key="facility.id" class="trust-card">
-          <div class="trust-card__main">
-            <p class="trust-card__title">{{ facility.name }}</p>
-            <p class="trust-address">{{ facility.address }}, {{ facility.city }} {{ facility.postal_code }}</p>
-            <div class="trust-tags">
-              <cv-tag :label="facility.jurisdiction" kind="cool-gray" />
-              <cv-tag v-if="distanceLabel(facility)" :label="distanceLabel(facility) ?? ''" kind="teal" />
-            </div>
-            <p class="trust-note">Inspected {{ formatDate(facility.latest_inspection_at) }}</p>
-          </div>
-          <div class="trust-card__actions">
-            <cv-tag :label="`${facility.trust_score}`" kind="green" />
-            <div class="trust-card__vote-actions">
-              <cv-button
-                size="sm"
-                kind="ghost"
-                :aria-label="`Like ${facility.name}`"
-                :disabled="isVoting(facility.id)"
-                @click="submitVote(facility.id, 'like')"
-              >
-                <ThumbsUp16 />
-                <span class="trust-vote-count">{{ facility.likes ?? 0 }}</span>
-              </cv-button>
-              <cv-button
-                size="sm"
-                kind="ghost"
-                :aria-label="`Dislike ${facility.name}`"
-                :disabled="isVoting(facility.id)"
-                @click="submitVote(facility.id, 'dislike')"
-              >
-                <ThumbsDown16 />
-                <span class="trust-vote-count">{{ facility.dislikes ?? 0 }}</span>
-              </cv-button>
-            </div>
-          </div>
-        </li>
-      </ul>
-
-      <div v-if="totalMatches > 0" class="trust-pagination">
-        <p class="trust-page-indicator">Page {{ currentPage }} of {{ totalPages }}</p>
-        <cv-pagination
-          :number-of-items="totalMatches"
-          :page="currentPage"
-          :page-sizes="paginationPageSizes"
-          :page-size="pageSize"
-          @change="onPaginationChange"
-        />
-      </div>
-    </section>
-    </div>
-
-    <section class="trust-panel">
-      <header class="trust-section-head">
-        <h2 class="trust-heading">Data Sources</h2>
-      </header>
-      <p class="trust-note">
-        CleanPlated combines official county and city inspection sources across Southern California,
-        including LA Open Data, San Diego Socrata, Long Beach Public Health, Orange/Pasadena public records,
-        and Riverside/San Bernardino LIVES feeds.
-      </p>
-      <cv-structured-list>
-        <template v-slot:headings>
-          <cv-structured-list-heading>Data Source</cv-structured-list-heading>
-          <cv-structured-list-heading>Records Fetched</cv-structured-list-heading>
-          <cv-structured-list-heading>Status</cv-structured-list-heading>
-        </template>
-        <template v-slot:items>
-          <cv-structured-list-item v-for="connector in connectorRows" :key="connector.source">
-            <cv-structured-list-data>
-              {{ formatSourceName(connector.source) }}
-              <cv-inline-notification
-                v-if="connector.error"
-                kind="warning"
-                title="Connector issue"
-                :sub-title="summarizeConnectorError(connector.error) ?? ''"
-                :hide-close-button="true"
-                :low-contrast="true"
-                style="margin-top: 0.5rem;"
-              />
-            </cv-structured-list-data>
-            <cv-structured-list-data>
-              {{ connector.error ? 'N/A' : connector.fetched_records.toLocaleString() }}
-            </cv-structured-list-data>
-            <cv-structured-list-data>
-              <cv-tag :label="connector.error ? 'Error' : 'Healthy'" :kind="connector.error ? 'red' : 'green'" />
-            </cv-structured-list-data>
-          </cv-structured-list-item>
-        </template>
-      </cv-structured-list>
+      <p class="cp-meta">Last updated: {{ lastRefreshLabel }}</p>
     </section>
   </main>
 
-  <footer class="trust-footer">
-    <div class="trust-footer__inner">
-      <div>
-        <p class="trust-footer__brand">CleanPlated</p>
-        <p class="trust-footer__copy">
-          Southern California inspection data, normalized into one reliable Trust Score.
-        </p>
-      </div>
-      <div class="trust-footer__meta">
-        <p>Latest ingestion: {{ lastRefreshLabel }}</p>
-        <p class="trust-footer__credit">
-          Built with
-          <img src="/omega-purple.svg" alt="Cipher Labs logo" class="trust-footer__logo" loading="lazy" />
-          by
-          <a href="https://thecipherlabs.com" target="_blank" rel="noopener noreferrer">Cipher Labs</a>
-          &copy; {{ new Date().getFullYear() }} CleanPlated
-        </p>
-      </div>
-      <nav class="trust-footer__links" aria-label="Footer links">
-        <a href="#data-sources">Data sources</a>
+  <!-- ─── Footer ─── -->
+  <footer class="cp-footer">
+    <div class="cp-footer__inner">
+      <p class="cp-footer__brand">CleanPlated</p>
+      <p class="cp-footer__copy">
+        Making public health data accessible, transparent, and useful for everyone.
+      </p>
+      <p class="cp-footer__credit">
+        Built by
+        <img src="/omega-purple.svg" alt="Cipher Labs" class="cp-footer__logo" loading="lazy" />
+        <a href="https://thecipherlabs.com" target="_blank" rel="noopener noreferrer">Cipher Labs</a>
+      </p>
+      <nav class="cp-footer__links" aria-label="Footer">
+        <a href="#data-sources">Sources</a>
         <a href="https://thecipherlabs.com" target="_blank" rel="noopener noreferrer">Cipher Labs</a>
       </nav>
+      <p class="cp-footer__legal">&copy; {{ new Date().getFullYear() }} CleanPlated. All rights reserved.</p>
     </div>
   </footer>
 </template>
